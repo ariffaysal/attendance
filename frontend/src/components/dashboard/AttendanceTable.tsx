@@ -4,9 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 interface AttendanceRecord {
   status: string;
-  empNo: string;
   acNo: string;
-  no: string;
   name: string;
   date: string;
   clockIn: string;
@@ -45,7 +43,7 @@ export function AttendanceTable({ records, pagination, loading }: AttendanceTabl
     if (Array.isArray(r)) {
       // Old array format indices
       const indices: Record<string, number> = {
-        status: 0, empNo: 1, acNo: 2, no: 3, name: 4, date: 6,
+        status: 0, acNo: 2, name: 4, date: 6,
         clockIn: 10, clockOut: 11, late: 14, department: 22
       };
       return r[indices[field]] || '';
@@ -70,8 +68,8 @@ export function AttendanceTable({ records, pagination, loading }: AttendanceTabl
           <thead>
             <tr>
               <th>Status</th>
-              <th>Emp No.</th>
               <th>Name</th>
+              <th>AC-No.</th>
               <th>Date</th>
               <th>In Time</th>
               <th>Out Time</th>
@@ -87,8 +85,8 @@ export function AttendanceTable({ records, pagination, loading }: AttendanceTabl
                     {getValue(r, 'status')}
                   </span>
                 </td>
-                <td className="fw-medium">#{getValue(r, 'no')}</td>
-                <td className="fw-semibold text-dark">{getValue(r, 'name')}</td>
+                <td className="fw-semibold text-dark">{getValue(r, 'name') || '-'}</td>
+                <td className="fw-medium">{getValue(r, 'acNo') || '-'}</td>
                 <td>{getValue(r, 'date')}</td>
                 <td className="text-success fw-medium">{getValue(r, 'clockIn') || '--:--'}</td>
                 <td className="text-danger fw-medium">{getValue(r, 'clockOut') || '--:--'}</td>

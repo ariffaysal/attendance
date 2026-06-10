@@ -93,21 +93,22 @@ export default function MonthlyPage() {
               </p>
             </div>
 
-            {segment.employees.map((employee) => {
-              const daysInMonth = new Date(segment.year, new Date(Date.parse(segment.month + ' 1, 2000')).getMonth() + 1, 0).getDate();
-              return (
-              <div key={employee.empId} className="mb-5" style={{ pageBreakInside: 'avoid' }}>
-                <div className="d-flex align-items-center mb-3">
-                  <h5 className="mb-0">{employee.name}</h5>
-                  <small className="text-muted ms-2">(ID: {employee.no})</small>
-                </div>
+              {segment.employees.map((employee, empIdx) => {
+                const daysInMonth = new Date(segment.year, new Date(Date.parse(segment.month + ' 1, 2000')).getMonth() + 1, 0).getDate();
+                return (
+                <div key={`${employee.acNo}-${empIdx}`} className="mb-5" style={{ pageBreakInside: 'avoid' }}>
+                  <div className="d-flex align-items-center mb-3">
+                    <h5 className="mb-0 fw-bold text-primary">
+                      {employee.name} (AC-No.: {employee.acNo})
+                    </h5>
+                  </div>
 
                 <div className="table-responsive">
                   <table className="table table-bordered table-sm">
                     <thead className="table-dark">
                       <tr>
                         {Array.from({ length: daysInMonth }, (_, i) => (
-                          <th key={i} className="text-center" style={{ width: '3%' }}>
+                          <th key={`day-header-${i + 1}`} className="text-center" style={{ width: '3%' }}>
                             {i + 1}
                           </th>
                         ))}
@@ -120,7 +121,7 @@ export default function MonthlyPage() {
                       <tr>
                         {employee.records.slice(0, daysInMonth).map((day, idx) => (
                           <td
-                            key={idx}
+                            key={`day-cell-${idx + 1}`}
                             className={`text-center ${
                               day.status === 'P'
                                 ? 'bg-success bg-opacity-10 text-success fw-bold'

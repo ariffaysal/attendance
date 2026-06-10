@@ -1,8 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function LibraryDashboard() {
+  const { user } = useAuth();
+
   return (
     <div className="fade-in">
       <div className="top-bar mb-4 d-flex justify-content-between align-items-center">
@@ -89,29 +92,31 @@ export default function LibraryDashboard() {
         </div>
 
         {/* Assign Users Card */}
-        <div className="col-md-6 col-lg-4">
-          <Link href="/library/assign-users" className="text-decoration-none">
-            <div className="card h-100 hover-lift">
-              <div className="card-body">
-                <div className="d-flex align-items-center mb-3">
-                  <div className="stat-icon info">
-                    <i className="fas fa-user-plus"></i>
+        {user?.role === 'admin' && (
+          <div className="col-md-6 col-lg-4">
+            <Link href="/library/assign-users" className="text-decoration-none">
+              <div className="card h-100 hover-lift">
+                <div className="card-body">
+                  <div className="d-flex align-items-center mb-3">
+                    <div className="stat-icon info">
+                      <i className="fas fa-user-plus"></i>
+                    </div>
+                    <div className="ms-3">
+                      <h5 className="card-title mb-1 text-dark">Assign Users</h5>
+                      <p className="text-muted mb-0 small">Create and manage user accounts</p>
+                    </div>
                   </div>
-                  <div className="ms-3">
-                    <h5 className="card-title mb-1 text-dark">Assign Users</h5>
-                    <p className="text-muted mb-0 small">Create and manage user accounts</p>
+                  <p className="card-text text-muted">
+                    Create new user accounts with employee ID, email, and password. Manage existing users.
+                  </p>
+                  <div className="mt-3">
+                    <span className="badge bg-info text-white">Manage Users</span>
                   </div>
-                </div>
-                <p className="card-text text-muted">
-                  Create new user accounts with employee ID, email, and password. Manage existing users.
-                </p>
-                <div className="mt-3">
-                  <span className="badge bg-info text-white">Manage Users</span>
                 </div>
               </div>
-            </div>
-          </Link>
-        </div>
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* Quick Guide */}

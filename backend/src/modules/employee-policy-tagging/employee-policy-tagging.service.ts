@@ -14,9 +14,10 @@ export class EmployeePolicyTaggingService {
     if (!row) return null;
     return {
       id: row.id,
-      empCode: row.emp_code,
-      empId: row.emp_id,
-      empName: row.emp_name,
+      // Identity columns (only 2 columns: Name and AC-No.)
+      acNo: row['AC-No.'] || '',
+      name: row.Name || '',
+      // Employee info
       category: row.category,
       company: row.company,
       location: row.location,
@@ -25,7 +26,7 @@ export class EmployeePolicyTaggingService {
       section: row.section,
       subsection: row.subsection,
       designation: row.designation,
-      // Policies
+      // Policies (all 16 policies with their date fields)
       overtimePolicyRule: row.overtime_policy_rule,
       overtimePolicyDate: row.overtime_policy_date,
       holidayIncentiveRule: row.holiday_incentive_rule,
@@ -64,26 +65,23 @@ export class EmployeePolicyTaggingService {
   }
 
   async findAll(search?: string): Promise<any[]> {
-    let query = 'SELECT * FROM employee_policy_tagging';
+    let query = `SELECT * FROM employee_policy_tagging`;
     const params: any[] = [];
 
     if (search) {
-      query += ' WHERE emp_code LIKE ? OR emp_name LIKE ? OR emp_id LIKE ?';
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm);
+      query += ` WHERE \`AC-No.\` LIKE ?`;
+      params.push(`%${search}%`);
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY id ASC';
 
     const [rows] = await this.connection.execute(query, params);
     return (rows as any[]).map(row => this.transformToCamelCase(row));
   }
 
   async findOne(id: number): Promise<any> {
-    const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_policy_tagging WHERE id = ?',
-      [id],
-    );
+    const query = `SELECT * FROM employee_policy_tagging WHERE id = ?`;
+    const [rows] = await this.connection.execute(query, [id]);
 
     const records = rows as any[];
     if (records.length === 0) {
@@ -92,49 +90,55 @@ export class EmployeePolicyTaggingService {
     return this.transformToCamelCase(records[0]);
   }
 
-  async findByEmpCode(empCode: string): Promise<any | null> {
-    const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_policy_tagging WHERE emp_code = ?',
-      [empCode],
-    );
+  async findByACNo(acNo: string): Promise<any | null> {
+    const query = `SELECT * FROM employee_policy_tagging WHERE \`AC-No.\` = ? LIMIT 1`;
+    const [rows] = await this.connection.execute(query, [acNo]);
 
     const records = rows as any[];
     return records.length > 0 ? this.transformToCamelCase(records[0]) : null;
   }
 
+  // Alias for backward compatibility (deprecated)
+  async findByEmpCode(empCode: string): Promise<any | null> {
+    return this.findByACNo(empCode);
+  }
+
   async create(dto: CreatePolicyTaggingDto): Promise<any> {
-    // Check for duplicate emp_code
-    const existing = await this.findByEmpCode(dto.empCode);
-    if (existing) {
-      throw new BadRequestException('Employee code already has policy tagging');
+    console.log('DEBUG: Backend create DTO:', JSON.stringify(dto, null, 2));
+    
+    // Use the exact data from frontend (no lookup to avoid wrong person selection)
+    const acNo = dto.acNo || '';
+    const name = dto.name || '';
+    
+    // Check for duplicate AC-No.
+    if (acNo) {
+      const existing = await this.findByACNo(acNo);
+      if (existing) {
+        throw new BadRequestException('Employee with this AC-No. already has policy tagging');
+      }
+    }
+    
+    if (!acNo) {
+      throw new BadRequestException('AC-No. is required. Please select a valid employee.');
     }
 
     const sql = `
       INSERT INTO employee_policy_tagging (
-        emp_code, emp_id, emp_name, category, company, location, division, department, section, subsection, designation,
-        overtime_policy_rule, overtime_policy_date,
-        holiday_incentive_rule, holiday_incentive_date,
-        duty_roster_policy_rule, duty_roster_policy_date,
-        leave_policy_rule, leave_policy_date,
-        maternity_leave_policy_rule, maternity_leave_policy_date,
-        attendance_bonus_policy_rule, attendance_bonus_policy_date,
-        absent_deduction_policy_rule, absent_deduction_policy_date,
-        late_deduction_policy_rule, late_deduction_policy_date,
-        bonus_policy_rule, bonus_policy_date,
-        tax_policy_rule, tax_policy_date,
-        shift_policy_rule, shift_policy_date,
-        tiffin_bill_policy_rule, tiffin_bill_policy_date,
-        allowance_policy_rule, allowance_policy_date,
-        early_out_deduction_policy_rule, early_out_deduction_policy_date,
-        service_benefit_policy_rule, service_benefit_policy_date,
-        hd_deduct_rule_rule, hd_deduct_rule_date
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \`AC-No.\`, \`Name\`, category, company, location, division, department, section, subsection, designation,
+        overtime_policy_rule, overtime_policy_date, holiday_incentive_rule, holiday_incentive_date,
+        duty_roster_policy_rule, duty_roster_policy_date, leave_policy_rule, leave_policy_date,
+        maternity_leave_policy_rule, maternity_leave_policy_date, attendance_bonus_policy_rule, attendance_bonus_policy_date,
+        absent_deduction_policy_rule, absent_deduction_policy_date, late_deduction_policy_rule, late_deduction_policy_date,
+        bonus_policy_rule, bonus_policy_date, tax_policy_rule, tax_policy_date,
+        shift_policy_rule, shift_policy_date, tiffin_bill_policy_rule, tiffin_bill_policy_date,
+        allowance_policy_rule, allowance_policy_date, early_out_deduction_policy_rule, early_out_deduction_policy_date,
+        service_benefit_policy_rule, service_benefit_policy_date, hd_deduct_rule_policy_rule, hd_deduct_rule_policy_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-
+    
     const values = [
-      dto.empCode,
-      dto.empId || null,
-      dto.empName || null,
+      acNo || '',
+      name || '',
       dto.category || null,
       dto.company || null,
       dto.location || null,
@@ -173,8 +177,8 @@ export class EmployeePolicyTaggingService {
       dto.earlyOutDeductionPolicyDate || null,
       dto.serviceBenefitPolicyRule || null,
       dto.serviceBenefitPolicyDate || null,
-      dto.hdDeductRuleRule || null,
-      dto.hdDeductRuleDate || null,
+      dto.hdDeductRulePolicyRule || null,
+      dto.hdDeductRulePolicyDate || null,
     ];
 
     const [result] = await this.connection.execute(sql, values);
@@ -192,19 +196,8 @@ export class EmployeePolicyTaggingService {
     );
     const rawExisting = (existingRows as any[])[0];
 
-    // Check if emp_code is being changed and if new code already exists
-    if (dto.empCode && dto.empCode !== rawExisting.emp_code) {
-      const duplicate = await this.findByEmpCode(dto.empCode);
-      if (duplicate && duplicate.id !== id) {
-        throw new BadRequestException('Employee code already has policy tagging');
-      }
-    }
-
     const sql = `
       UPDATE employee_policy_tagging SET
-        emp_code = ?,
-        emp_id = ?,
-        emp_name = ?,
         category = ?,
         company = ?,
         location = ?,
@@ -213,88 +206,86 @@ export class EmployeePolicyTaggingService {
         section = ?,
         subsection = ?,
         designation = ?,
-        overtime_policy_rule = ?,
-        overtime_policy_date = ?,
-        holiday_incentive_rule = ?,
-        holiday_incentive_date = ?,
-        duty_roster_policy_rule = ?,
-        duty_roster_policy_date = ?,
-        leave_policy_rule = ?,
-        leave_policy_date = ?,
-        maternity_leave_policy_rule = ?,
-        maternity_leave_policy_date = ?,
-        attendance_bonus_policy_rule = ?,
-        attendance_bonus_policy_date = ?,
-        absent_deduction_policy_rule = ?,
-        absent_deduction_policy_date = ?,
-        late_deduction_policy_rule = ?,
-        late_deduction_policy_date = ?,
-        bonus_policy_rule = ?,
-        bonus_policy_date = ?,
-        tax_policy_rule = ?,
-        tax_policy_date = ?,
-        shift_policy_rule = ?,
-        shift_policy_date = ?,
-        tiffin_bill_policy_rule = ?,
-        tiffin_bill_policy_date = ?,
-        allowance_policy_rule = ?,
-        allowance_policy_date = ?,
-        early_out_deduction_policy_rule = ?,
-        early_out_deduction_policy_date = ?,
-        service_benefit_policy_rule = ?,
-        service_benefit_policy_date = ?,
-        hd_deduct_rule_rule = ?,
-        hd_deduct_rule_date = ?
+        overtime_policy_rule = ?, overtime_policy_date = ?,
+        holiday_incentive_rule = ?, holiday_incentive_date = ?,
+        duty_roster_policy_rule = ?, duty_roster_policy_date = ?,
+        leave_policy_rule = ?, leave_policy_date = ?,
+        maternity_leave_policy_rule = ?, maternity_leave_policy_date = ?,
+        attendance_bonus_policy_rule = ?, attendance_bonus_policy_date = ?,
+        absent_deduction_policy_rule = ?, absent_deduction_policy_date = ?,
+        late_deduction_policy_rule = ?, late_deduction_policy_date = ?,
+        bonus_policy_rule = ?, bonus_policy_date = ?,
+        tax_policy_rule = ?, tax_policy_date = ?,
+        shift_policy_rule = ?, shift_policy_date = ?,
+        tiffin_bill_policy_rule = ?, tiffin_bill_policy_date = ?,
+        allowance_policy_rule = ?, allowance_policy_date = ?,
+        early_out_deduction_policy_rule = ?, early_out_deduction_policy_date = ?,
+        service_benefit_policy_rule = ?, service_benefit_policy_date = ?,
+        hd_deduct_rule_policy_rule = ?, hd_deduct_rule_policy_date = ?
       WHERE id = ?
     `;
 
+    // Helper to handle undefined values - convert to null for SQL
+    const getValue = (dtoValue: any, existingValue: any) => {
+      if (dtoValue !== undefined) {
+        return dtoValue === '' ? null : dtoValue;
+      }
+      // Even existing values might be undefined, so handle them too
+      return existingValue === undefined ? null : existingValue;
+    };
+    
     const values = [
-      dto.empCode || rawExisting.emp_code,
-      dto.empId !== undefined ? dto.empId : rawExisting.emp_id,
-      dto.empName !== undefined ? dto.empName : rawExisting.emp_name,
-      dto.category !== undefined ? dto.category : rawExisting.category,
-      dto.company !== undefined ? dto.company : rawExisting.company,
-      dto.location !== undefined ? dto.location : rawExisting.location,
-      dto.division !== undefined ? dto.division : rawExisting.division,
-      dto.department !== undefined ? dto.department : rawExisting.department,
-      dto.section !== undefined ? dto.section : rawExisting.section,
-      dto.subsection !== undefined ? dto.subsection : rawExisting.subsection,
-      dto.designation !== undefined ? dto.designation : rawExisting.designation,
-      dto.overtimePolicyRule !== undefined ? dto.overtimePolicyRule : rawExisting.overtime_policy_rule,
-      dto.overtimePolicyDate !== undefined ? dto.overtimePolicyDate : rawExisting.overtime_policy_date,
-      dto.holidayIncentiveRule !== undefined ? dto.holidayIncentiveRule : rawExisting.holiday_incentive_rule,
-      dto.holidayIncentiveDate !== undefined ? dto.holidayIncentiveDate : rawExisting.holiday_incentive_date,
-      dto.dutyRosterPolicyRule !== undefined ? dto.dutyRosterPolicyRule : rawExisting.duty_roster_policy_rule,
-      dto.dutyRosterPolicyDate !== undefined ? dto.dutyRosterPolicyDate : rawExisting.duty_roster_policy_date,
-      dto.leavePolicyRule !== undefined ? dto.leavePolicyRule : rawExisting.leave_policy_rule,
-      dto.leavePolicyDate !== undefined ? dto.leavePolicyDate : rawExisting.leave_policy_date,
-      dto.maternityLeavePolicyRule !== undefined ? dto.maternityLeavePolicyRule : rawExisting.maternity_leave_policy_rule,
-      dto.maternityLeavePolicyDate !== undefined ? dto.maternityLeavePolicyDate : rawExisting.maternity_leave_policy_date,
-      dto.attendanceBonusPolicyRule !== undefined ? dto.attendanceBonusPolicyRule : rawExisting.attendance_bonus_policy_rule,
-      dto.attendanceBonusPolicyDate !== undefined ? dto.attendanceBonusPolicyDate : rawExisting.attendance_bonus_policy_date,
-      dto.absentDeductionPolicyRule !== undefined ? dto.absentDeductionPolicyRule : rawExisting.absent_deduction_policy_rule,
-      dto.absentDeductionPolicyDate !== undefined ? dto.absentDeductionPolicyDate : rawExisting.absent_deduction_policy_date,
-      dto.lateDeductionPolicyRule !== undefined ? dto.lateDeductionPolicyRule : rawExisting.late_deduction_policy_rule,
-      dto.lateDeductionPolicyDate !== undefined ? dto.lateDeductionPolicyDate : rawExisting.late_deduction_policy_date,
-      dto.bonusPolicyRule !== undefined ? dto.bonusPolicyRule : rawExisting.bonus_policy_rule,
-      dto.bonusPolicyDate !== undefined ? dto.bonusPolicyDate : rawExisting.bonus_policy_date,
-      dto.taxPolicyRule !== undefined ? dto.taxPolicyRule : rawExisting.tax_policy_rule,
-      dto.taxPolicyDate !== undefined ? dto.taxPolicyDate : rawExisting.tax_policy_date,
-      dto.shiftPolicyRule !== undefined ? dto.shiftPolicyRule : rawExisting.shift_policy_rule,
-      dto.shiftPolicyDate !== undefined ? dto.shiftPolicyDate : rawExisting.shift_policy_date,
-      dto.tiffinBillPolicyRule !== undefined ? dto.tiffinBillPolicyRule : rawExisting.tiffin_bill_policy_rule,
-      dto.tiffinBillPolicyDate !== undefined ? dto.tiffinBillPolicyDate : rawExisting.tiffin_bill_policy_date,
-      dto.allowancePolicyRule !== undefined ? dto.allowancePolicyRule : rawExisting.allowance_policy_rule,
-      dto.allowancePolicyDate !== undefined ? dto.allowancePolicyDate : rawExisting.allowance_policy_date,
-      dto.earlyOutDeductionPolicyRule !== undefined ? dto.earlyOutDeductionPolicyRule : rawExisting.early_out_deduction_policy_rule,
-      dto.earlyOutDeductionPolicyDate !== undefined ? dto.earlyOutDeductionPolicyDate : rawExisting.early_out_deduction_policy_date,
-      dto.serviceBenefitPolicyRule !== undefined ? dto.serviceBenefitPolicyRule : rawExisting.service_benefit_policy_rule,
-      dto.serviceBenefitPolicyDate !== undefined ? dto.serviceBenefitPolicyDate : rawExisting.service_benefit_policy_date,
-      dto.hdDeductRuleRule !== undefined ? dto.hdDeductRuleRule : rawExisting.hd_deduct_rule_rule,
-      dto.hdDeductRuleDate !== undefined ? dto.hdDeductRuleDate : rawExisting.hd_deduct_rule_date,
+      getValue(dto.category, rawExisting.category),
+      getValue(dto.company, rawExisting.company),
+      getValue(dto.location, rawExisting.location),
+      getValue(dto.division, rawExisting.division),
+      getValue(dto.department, rawExisting.department),
+      getValue(dto.section, rawExisting.section),
+      getValue(dto.subsection, rawExisting.subsection),
+      getValue(dto.designation, rawExisting.designation),
+      getValue(dto.overtimePolicyRule, rawExisting.overtime_policy_rule),
+      getValue(dto.overtimePolicyDate, rawExisting.overtime_policy_date),
+      getValue(dto.holidayIncentiveRule, rawExisting.holiday_incentive_rule),
+      getValue(dto.holidayIncentiveDate, rawExisting.holiday_incentive_date),
+      getValue(dto.dutyRosterPolicyRule, rawExisting.duty_roster_policy_rule),
+      getValue(dto.dutyRosterPolicyDate, rawExisting.duty_roster_policy_date),
+      getValue(dto.leavePolicyRule, rawExisting.leave_policy_rule),
+      getValue(dto.leavePolicyDate, rawExisting.leave_policy_date),
+      getValue(dto.maternityLeavePolicyRule, rawExisting.maternity_leave_policy_rule),
+      getValue(dto.maternityLeavePolicyDate, rawExisting.maternity_leave_policy_date),
+      getValue(dto.attendanceBonusPolicyRule, rawExisting.attendance_bonus_policy_rule),
+      getValue(dto.attendanceBonusPolicyDate, rawExisting.attendance_bonus_policy_date),
+      getValue(dto.absentDeductionPolicyRule, rawExisting.absent_deduction_policy_rule),
+      getValue(dto.absentDeductionPolicyDate, rawExisting.absent_deduction_policy_date),
+      getValue(dto.lateDeductionPolicyRule, rawExisting.late_deduction_policy_rule),
+      getValue(dto.lateDeductionPolicyDate, rawExisting.late_deduction_policy_date),
+      getValue(dto.bonusPolicyRule, rawExisting.bonus_policy_rule),
+      getValue(dto.bonusPolicyDate, rawExisting.bonus_policy_date),
+      getValue(dto.taxPolicyRule, rawExisting.tax_policy_rule),
+      getValue(dto.taxPolicyDate, rawExisting.tax_policy_date),
+      getValue(dto.shiftPolicyRule, rawExisting.shift_policy_rule),
+      getValue(dto.shiftPolicyDate, rawExisting.shift_policy_date),
+      getValue(dto.tiffinBillPolicyRule, rawExisting.tiffin_bill_policy_rule),
+      getValue(dto.tiffinBillPolicyDate, rawExisting.tiffin_bill_policy_date),
+      getValue(dto.allowancePolicyRule, rawExisting.allowance_policy_rule),
+      getValue(dto.allowancePolicyDate, rawExisting.allowance_policy_date),
+      getValue(dto.earlyOutDeductionPolicyRule, rawExisting.early_out_deduction_policy_rule),
+      getValue(dto.earlyOutDeductionPolicyDate, rawExisting.early_out_deduction_policy_date),
+      getValue(dto.serviceBenefitPolicyRule, rawExisting.service_benefit_policy_rule),
+      getValue(dto.serviceBenefitPolicyDate, rawExisting.service_benefit_policy_date),
+      getValue(dto.hdDeductRulePolicyRule, rawExisting.hd_deduct_rule_policy_rule),
+      getValue(dto.hdDeductRulePolicyDate, rawExisting.hd_deduct_rule_policy_date),
       id,
     ];
 
+    // Debug: Check for any undefined values before executing
+    for (let i = 0; i < values.length; i++) {
+      if (values[i] === undefined) {
+        console.error(`Undefined value at index ${i}:`, values[i]);
+        values[i] = null; // Fix undefined values
+      }
+    }
+    
     await this.connection.execute(sql, values);
     return this.findOne(id);
   }

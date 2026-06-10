@@ -14,9 +14,15 @@ export class EmployeeEducationService {
     if (!row) return null;
     return {
       id: row.id,
-      empCode: row.emp_code,
-      empId: row.emp_id,
-      empName: row.emp_name,
+      // CSV 4 identity columns from csv_employees (PRIORITY)
+      empNo: row['Emp No.'] || row.emp_no || row.empNo || '',
+      acNo: row['AC-No.'] || row.ac_no || row.acNo || '',
+      no: row['No.'] || row.no || '',
+      name: row['Name'] || row.name || '',
+      // Local record fields (fallback)
+      empCode: row.emp_code || row['AC-No.'] || row['No.'] || '',
+      empId: row.emp_id || row['Emp No.'] || '',
+      empName: row.emp_name || row['Name'] || '',
       category: row.category,
       company: row.company,
       location: row.location,
@@ -39,24 +45,37 @@ export class EmployeeEducationService {
   }
 
   async findAll(search?: string): Promise<any[]> {
-    let query = 'SELECT * FROM employee_education';
+    let query = `
+      SELECT ee.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+      FROM employee_education ee
+      LEFT JOIN csv_employees ce ON ee.emp_code = ce.\`No.\` OR ee.emp_code = ce.\`AC-No.\`
+    `;
     const params: any[] = [];
 
     if (search) {
-      query += ' WHERE emp_code LIKE ? OR emp_name LIKE ? OR course_name LIKE ? OR institution LIKE ?';
+      query += `
+        WHERE ce.\`Name\` LIKE ? 
+           OR ce.\`AC-No.\` LIKE ?
+           OR ee.course_name LIKE ?
+           OR ee.institution LIKE ?
+      `;
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY ce.`Name` ASC';
 
     const [rows] = await this.connection.execute(query, params);
     return (rows as any[]).map(row => this.transformToCamelCase(row));
   }
 
   async findOne(id: number): Promise<any> {
+    // Join with csv_employees to get the correct CSV 4 columns (source of truth)
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_education WHERE id = ?',
+      `SELECT ee.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+       FROM employee_education ee
+       LEFT JOIN csv_employees ce ON ee.emp_code = ce.\`No.\` OR ee.emp_code = ce.\`AC-No.\`
+       WHERE ee.id = ?`,
       [id],
     );
     
@@ -68,28 +87,73 @@ export class EmployeeEducationService {
   }
 
   async findByEmpCode(empCode: string): Promise<any[]> {
+    // Join with csv_employees to get the correct CSV 4 columns (source of truth)
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_education WHERE emp_code = ? ORDER BY created_at DESC',
-      [empCode],
+      `SELECT ee.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+       FROM employee_education ee
+       LEFT JOIN csv_employees ce ON ee.emp_code = ce.\`No.\` OR ee.emp_code = ce.\`AC-No.\`
+       WHERE ee.\`AC-No.\` = ? OR ee.\`No.\` = ?
+       ORDER BY ee.created_at DESC`,
+      [empCode, empCode],
     );
     
     const educations = rows as any[];
     return educations.map(row => this.transformToCamelCase(row));
   }
 
+  /**
+   * Lookup the 4 CSV columns from csv_employees table
+   */
+  private async lookupCsvColumns(empCode: string): Promise<{ empNo: string; acNo: string; no: string; name: string }> {
+    const variations = [empCode];
+    if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+      variations.push(`EMP${empCode.substring(1)}`);
+      variations.push(empCode.substring(1));
+      variations.push(String(parseInt(empCode.substring(1), 10)));
+    } else if (!empCode.startsWith('EMP')) {
+      variations.push(`EMP${empCode}`);
+      variations.push(`E${empCode}`);
+    }
+
+    for (const codeVar of variations) {
+      const [rows] = await this.connection.execute(
+        `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\` FROM csv_employees WHERE \`AC-No.\` = ? OR \`No.\` = ? LIMIT 1`,
+        [codeVar, codeVar]
+      );
+      const csvEmps = rows as any[];
+      if (csvEmps.length > 0) {
+        return {
+          empNo: csvEmps[0]['Emp No.'] || '',
+          acNo: csvEmps[0]['AC-No.'] || '',
+          no: csvEmps[0]['No.'] || '',
+          name: csvEmps[0]['Name'] || ''
+        };
+      }
+    }
+
+    return { empNo: '', acNo: '', no: '', name: '' };
+  }
+
   async create(dto: CreateEmployeeEducationDto): Promise<any> {
     const sql = `
       INSERT INTO employee_education (
-        emp_code, emp_id, emp_name, category, company, location, division, department, 
+        \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`,
+        emp_code, emp_id, emp_name,
+        category, company, location, division, department, 
         section, subsection, designation, course_name, board, institution, discipline, 
         major_subject, year, result, education_nature
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
+    // CSV columns come from frontend (already validated)
     const values = [
-      dto.empCode,
-      dto.empId || null,
-      dto.empName || null,
+      dto.empNo || dto.empId || null,    // Emp No. from frontend
+      dto.acNo || dto.empCode || null,  // AC-No. from frontend
+      dto.no || dto.empCode || null,    // No. from frontend
+      dto.name || dto.empName || null,  // Name from frontend
+      dto.empCode || null,                // emp_code for compatibility
+      dto.empId || null,                  // emp_id for compatibility
+      dto.empName || null,                // emp_name for compatibility
       dto.category || null,
       dto.company || null,
       dto.location || null,
@@ -124,9 +188,6 @@ export class EmployeeEducationService {
 
     const sql = `
       UPDATE employee_education SET
-        emp_code = ?,
-        emp_id = ?,
-        emp_name = ?,
         category = ?,
         company = ?,
         location = ?,
@@ -146,10 +207,8 @@ export class EmployeeEducationService {
       WHERE id = ?
     `;
 
+    // CSV columns (Emp No., AC-No., No., Name) are NOT updated - they remain from CSV
     const values = [
-      dto.empCode || rawExisting.emp_code,
-      dto.empId !== undefined ? dto.empId : rawExisting.emp_id,
-      dto.empName !== undefined ? dto.empName : rawExisting.emp_name,
       dto.category !== undefined ? dto.category : rawExisting.category,
       dto.company !== undefined ? dto.company : rawExisting.company,
       dto.location !== undefined ? dto.location : rawExisting.location,

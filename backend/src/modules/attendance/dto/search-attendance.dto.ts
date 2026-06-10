@@ -8,9 +8,9 @@ export class SearchAttendanceDto {
   search?: string = '';
 
   @IsOptional()
-  @IsIn(['general', 'emp_no', 'acc_no', ''])
+  @IsIn(['general', 'acc_no', 'name', ''])
   @Transform(({ value }) => value || 'general')
-  searchType?: 'general' | 'emp_no' | 'acc_no' = 'general';
+  searchType?: 'general' | 'acc_no' | 'name' = 'general';
 
   @IsOptional()
   @IsString()

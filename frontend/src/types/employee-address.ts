@@ -1,8 +1,14 @@
 export interface EmployeeAddress {
   id?: number;
   
-  // Employee Identification
-  empCode: string;
+  // CSV 4 columns (new standard)
+  empNo?: string;    // `Emp No.` from CSV
+  acNo?: string;     // `AC-No.` from CSV - PRIMARY key
+  no?: string;       // `No.` from CSV
+  name?: string;     // `Name` from CSV
+  
+  // Employee Identification (legacy - backward compatibility)
+  empCode: string;   // Maps to `No.`
   category: string;
   company: string;
   location: string;

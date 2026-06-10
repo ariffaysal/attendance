@@ -6,9 +6,9 @@ import { employeePolicyTaggingService } from '@/services/employee-policy-tagging
 
 interface PolicyTagging {
   id: number;
-  empCode: string;
-  empId: string;
-  empName: string;
+  // 2 columns
+  acNo: string;     // `AC-No.` from CSV - PRIMARY key
+  name: string;     // `Name` from CSV
   category: string;
   company: string;
   department: string;
@@ -16,9 +16,8 @@ interface PolicyTagging {
 }
 
 interface EmployeeGroup {
-  empCode: string;
-  empId: string;
-  empName: string;
+  acNo: string;     // `AC-No.` - primary lookup key
+  name: string;     // `Name`
   department: string;
   designation: string;
   company: string;
@@ -52,11 +51,10 @@ export default function EmployeePolicyTaggingDashboard() {
       const groups: Record<string, EmployeeGroup> = {};
       
       records.forEach((record) => {
-        if (!groups[record.empCode]) {
-          groups[record.empCode] = {
-            empCode: record.empCode,
-            empName: record.empName || '-',
-            empId: record.empId || '-',
+        if (!groups[record.acNo]) {
+          groups[record.acNo] = {
+            acNo: record.acNo,
+            name: record.name || '-',
             department: record.department || '-',
             designation: record.designation || '-',
             company: record.company || '-',
@@ -64,7 +62,7 @@ export default function EmployeePolicyTaggingDashboard() {
             firstRecordId: record.id,
           };
         }
-        groups[record.empCode].recordCount++;
+        groups[record.acNo].recordCount++;
       });
       
       setEmployeeGroups(Object.values(groups));
@@ -87,11 +85,11 @@ export default function EmployeePolicyTaggingDashboard() {
     }
   }
 
-  async function handleDeleteEmployee(empCode: string) {
+  async function handleDeleteEmployee(acNo: string) {
     if (!confirm('Are you sure you want to delete the policy tagging record for this employee?')) return;
 
     try {
-      const record = await employeePolicyTaggingService.getByEmpCode(empCode);
+      const record = await employeePolicyTaggingService.getByACNo(acNo);
       if (record && record.id) {
         await employeePolicyTaggingService.delete(record.id);
         await loadRecords();
@@ -144,9 +142,10 @@ export default function EmployeePolicyTaggingDashboard() {
             <input
               type="text"
               className="form-control border-start-0"
-              placeholder="Search by emp code, emp name, or department..."
+              placeholder="Search by employee name..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search by employee name"
             />
           </div>
         </div>
@@ -157,9 +156,8 @@ export default function EmployeePolicyTaggingDashboard() {
           <table className="table table-hover align-middle mb-0">
             <thead className="table-light">
               <tr>
-                <th>Emp Code</th>
-                <th>Emp ID</th>
-                <th>Emp Name</th>
+                <th>AC-No.</th>
+                <th>Name</th>
                 <th>Department</th>
                 <th>Designation</th>
                 <th className="text-center">Policy Records</th>
@@ -169,7 +167,7 @@ export default function EmployeePolicyTaggingDashboard() {
             <tbody>
               {employeeGroups.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-5">
+                  <td colSpan={5} className="text-center py-5">
                     <div className="text-muted">
                       <i className="fas fa-tags fa-2x mb-3 opacity-50"></i>
                       <p className="mb-0">No policy tagging records found.</p>
@@ -179,10 +177,9 @@ export default function EmployeePolicyTaggingDashboard() {
                 </tr>
               ) : (
                 employeeGroups.map((emp) => (
-                  <tr key={emp.empCode}>
-                    <td className="fw-medium text-primary">#{emp.empCode}</td>
-                    <td>{emp.empId}</td>
-                    <td>{emp.empName}</td>
+                  <tr key={emp.acNo}>
+                    <td className="fw-medium text-primary">#{emp.acNo}</td>
+                    <td>{emp.name}</td>
                     <td>{emp.department}</td>
                     <td>{emp.designation}</td>
                     <td className="text-center">
@@ -193,7 +190,7 @@ export default function EmployeePolicyTaggingDashboard() {
                     <td className="text-end">
                       <div className="btn-group">
                         <Link
-                          href={`/employee-policy-tagging/emp/${emp.empCode}`}
+                          href={`/employee-policy-tagging/emp/${emp.acNo}`}
                           className="btn btn-sm btn-outline-primary"
                           title="View Policy Details"
                         >
@@ -201,7 +198,7 @@ export default function EmployeePolicyTaggingDashboard() {
                         </Link>
                         <button
                           className="btn btn-sm btn-outline-danger"
-                          onClick={() => handleDeleteEmployee(emp.empCode)}
+                          onClick={() => handleDeleteEmployee(emp.acNo)}
                           title="Delete Policy Record"
                         >
                           <i className="fas fa-trash"></i>

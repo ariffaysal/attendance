@@ -3,9 +3,16 @@ import * as mysql from 'mysql2/promise';
 import { SQL_CONNECTION } from '../../database/database.module';
 import { getAllEmployeeFields } from '../../config/employee.config';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
+import { UpdateEmployeeDto } from './dto/update-employee.dto';
 
 export interface Employee {
   id: number;
+  // 4 Identity Columns (from csv_employees table - all stored, AC-No. is the lookup key)
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
+  // Legacy fields
   emp_code: string;
   emp_id: string;
   punch_card: string;
@@ -56,19 +63,43 @@ export class EmployeesService {
   }
 
   async findAll(search?: string): Promise<Employee[]> {
-    let query = 'SELECT * FROM employees';
+    // Query from csv_employees to show the unique uploaded list
+    // LEFT JOIN with employees to get extra details if they exist
+    let query = `
+      SELECT
+        ce.id,
+        ce.\`Emp No.\`,
+        ce.\`AC-No.\`,
+        ce.\`No.\`,
+        ce.\`Name\`,
+        ce.Department as department,
+        e.full_name_english,
+        e.full_name_bangla,
+        e.designation,
+        e.company,
+        e.mobile_no,
+        e.status
+      FROM csv_employees ce
+      LEFT JOIN employees e ON e.\`AC-No.\` = ce.\`AC-No.\`
+      WHERE ce.is_active = TRUE
+    `;
     const values: any[] = [];
 
     if (search) {
-      query += ' WHERE full_name_english LIKE ? OR emp_code LIKE ? OR emp_id LIKE ?';
+      query += ` AND (
+        ce.\`AC-No.\` LIKE ? OR
+        ce.\`Name\` LIKE ? OR
+        e.full_name_english LIKE ? OR
+        e.full_name_bangla LIKE ?
+      )`;
       const searchTerm = `%${search}%`;
-      values.push(searchTerm, searchTerm, searchTerm);
+      values.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY ce.\`AC-No.\` ASC';
 
     const [rows] = await this.db.execute(query, values);
-    return rows as Employee[];
+    return (rows as any[]).map(row => this.transformToCamelCase(row));
   }
 
   async findById(id: number): Promise<Employee | null> {
@@ -78,6 +109,44 @@ export class EmployeesService {
     );
     const employees = rows as Employee[];
     return employees[0] || null;
+  }
+
+  /**
+   * Lookup employee from csv_employees table by AC-No.
+   * Returns all 4 identity columns if found
+   */
+  private async lookupCsvEmployee(empCode: string): Promise<{empNo: string, acNo: string, no: string, name: string} | null> {
+    // Try to find employee in csv_employees by various code formats
+    const variations = [empCode];
+    if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+      variations.push(`EMP${empCode.substring(1)}`);
+      variations.push(empCode.substring(1));
+      variations.push(String(parseInt(empCode.substring(1), 10)));
+    } else if (!empCode.startsWith('EMP')) {
+      variations.push(`EMP${empCode}`);
+      variations.push(`E${empCode}`);
+    }
+
+    for (const codeVar of variations) {
+      const [rows] = await this.db.execute(
+        `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\` 
+         FROM csv_employees WHERE \`AC-No.\` = ? LIMIT 1`,
+        [codeVar]
+      );
+      const csvEmps = rows as any[];
+      if (csvEmps.length > 0) {
+        const emp = csvEmps[0];
+        return {
+          empNo: emp['Emp No.'] || '',
+          acNo: emp['AC-No.'] || '',
+          no: emp['No.'] || '',
+          name: emp['Name'] || ''
+        };
+      }
+    }
+
+    // Not found in CSV - return null (no auto-generation)
+    return null;
   }
 
   async create(dto: CreateEmployeeDto): Promise<Employee> {
@@ -98,10 +167,19 @@ export class EmployeesService {
       throw new BadRequestException('Mobile No already exists');
     }
 
+    // Lookup all 4 identity columns from csv_employees (CSV is the source of truth)
+    const csvEmp = await this.lookupCsvEmployee(dto.emp_code);
+
     const fields = this.fields;
     const placeholders = fields.map(() => '?').join(', ');
-    // Filter out 'undefined' string values that come from FormData conversion
+    // Map DTO values and handle CSV columns mapping
     const values = fields.map(field => {
+      // CSV 4 identity columns come ONLY from csv_employees table (CSV upload)
+      if (field === '`Emp No.`') return csvEmp?.empNo || '';
+      if (field === '`AC-No.`') return csvEmp?.acNo || '';
+      if (field === '`No.`') return csvEmp?.no || '';
+      if (field === '`Name`') return csvEmp?.name || '';
+      
       const val = dto[field as keyof CreateEmployeeDto];
       return val !== undefined && val !== null && val !== 'undefined' ? val : '';
     });
@@ -115,7 +193,7 @@ export class EmployeesService {
     return this.findById(newId) as Promise<Employee>;
   }
 
-  async update(id: number, dto: CreateEmployeeDto): Promise<Employee> {
+  async update(id: number, dto: UpdateEmployeeDto): Promise<Employee> {
     const existing = await this.findById(id);
     if (!existing) {
       throw new NotFoundException('Employee not found');
@@ -143,10 +221,14 @@ export class EmployeesService {
     }
 
     const fields = this.fields;
-    const setClause = fields.map(field => `${field} = ?`).join(', ');
+    // Filter out CSV columns from update - they come from CSV only and never change
+    const nonCsvFields = fields.filter(field => 
+      field !== '`Emp No.`' && field !== '`AC-No.`' && field !== '`No.`' && field !== '`Name`'
+    );
+    const setClause = nonCsvFields.map(field => `${field} = ?`).join(', ');
     
-    // Merge existing values with new values - preserve existing if new value is empty/undefined
-    const values = fields.map(field => {
+    // Only update non-CSV fields from DTO
+    const values = nonCsvFields.map(field => {
       const newValue = dto[field as keyof CreateEmployeeDto];
       const existingValue = existing[field as keyof Employee];
       const finalValue = newValue !== undefined && newValue !== null && newValue !== ''
@@ -184,52 +266,97 @@ export class EmployeesService {
 
   /**
    * Find employee by employee code (emp_code)
+   * PRIORITIZES csv_employees table data (source of truth)
+   * Then joins with employees table for additional details
    */
   async findByEmpCode(empCode: string): Promise<Employee | null> {
-    const [rows] = await this.db.execute(
-      'SELECT * FROM employees WHERE emp_code = ? LIMIT 1',
-      [empCode]
+    // Find in csv_employees (source of truth for all 4 identity columns)
+    // Search only by Name and AC-No.
+    const [csvRows] = await this.db.execute(
+      `SELECT
+        ce.id, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`, ce.Department,
+        e.designation, e.company, e.mobile_no, e.status
+       FROM csv_employees ce
+       LEFT JOIN employees e ON e.\`AC-No.\` = ce.\`AC-No.\`
+       WHERE ce.\`AC-No.\` = ? OR ce.\`Name\` LIKE ?
+       LIMIT 1`,
+      [empCode, `%${empCode}%`]
     );
-    const employees = rows as Employee[];
-    return employees[0] || null;
+
+    const csvEmps = csvRows as any[];
+    if (csvEmps.length > 0) {
+      return this.transformToCamelCase(csvEmps[0]);
+    }
+
+    // No employee found
+    return null;
   }
 
   /**
    * Search suggestions for autocomplete
+   * Search by: Name or AC-No. only based on searchType
+   * Returns all 4 identity fields: Emp No., AC-No., No., Name (for display)
    */
-  async getSearchSuggestions(query: string, limit: number = 10): Promise<any[]> {
+  async getSearchSuggestions(query: string, limit: number = 10, searchType?: string): Promise<any[]> {
+    // Search from csv_employees table
+    let rows: any[];
+
     if (!query || query.trim().length === 0) {
-      const [rows] = await this.db.execute(
-        `SELECT id, emp_code, emp_id, full_name_english, full_name_bangla, 
-                department, designation, company
-         FROM employees 
-         ORDER BY full_name_english ASC 
+      const [result] = await this.db.execute(
+        `SELECT id, \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, Department
+         FROM csv_employees
+         WHERE is_active = TRUE
+         ORDER BY \`AC-No.\` ASC
          LIMIT ?`,
         [limit]
       );
-      return rows as any[];
+      rows = result as any[];
+    } else {
+      const searchTerm = `%${query}%`;
+      let whereClause = '';
+      let queryParams: any[] = [];
+
+      if (searchType === 'acc_no') {
+        // Search only by AC-No.
+        whereClause = 'ce.`AC-No.` LIKE ?';
+        queryParams = [searchTerm];
+      } else {
+        // Default: search by Name (or if searchType is 'name')
+        whereClause = 'ce.`Name` LIKE ?';
+        queryParams = [searchTerm];
+      }
+
+      const [result] = await this.db.execute(
+        `SELECT ce.id, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`, ce.Department,
+                e.designation, e.company, e.mobile_no, e.status
+         FROM csv_employees ce
+         LEFT JOIN employees e ON e.\`AC-No.\` = ce.\`AC-No.\`
+         WHERE ce.is_active = TRUE AND (${whereClause})
+         ORDER BY ce.\`AC-No.\` ASC
+         LIMIT ?`,
+        [...queryParams, limit]
+      );
+      rows = result as any[];
     }
 
-    const searchTerm = `%${query}%`;
-    const [rows] = await this.db.execute(
-      `SELECT id, emp_code, emp_id, full_name_english, full_name_bangla, 
-              department, designation, company
-       FROM employees 
-       WHERE full_name_english LIKE ? 
-          OR emp_code LIKE ? 
-          OR emp_id LIKE ?
-          OR full_name_bangla LIKE ?
-       ORDER BY 
-         CASE 
-           WHEN emp_code = ? THEN 0
-           WHEN full_name_english LIKE ? THEN 1
-           ELSE 2
-         END,
-         full_name_english ASC
-       LIMIT ?`,
-      [searchTerm, searchTerm, searchTerm, searchTerm, query, `${query}%`, limit]
-    );
-    return rows as any[];
+    // Transform to include all 4 identity columns from csv_employees (for display)
+    return rows.map(row => ({
+      id: row.id,
+      // 4 Identity Columns from csv_employees (source of truth)
+      empNo: row['Emp No.'] || '',
+      acNo: row['AC-No.'] || '',
+      no: row['No.'] || '',
+      name: row['Name'] || '',
+      // Legacy fields (for backward compatibility)
+      emp_code: row['AC-No.'] || '',
+      emp_id: row['AC-No.'] || '',
+      full_name_english: row['Name'] || '',
+      department: row.Department,
+      designation: row.designation || '',
+      company: row.company || '',
+      mobile_no: row.mobile_no || '',
+      status: row.status || '',
+    }));
   }
 
   /**
@@ -247,5 +374,81 @@ export class EmployeesService {
     );
     const employees = rows as Employee[];
     return employees[0] || null;
+  }
+
+  /**
+   * Lookup employee by any identifier (code, ID, or name)
+   */
+  async findByIdentifier(identifier: string): Promise<Employee | null> {
+    // Search by AC-No. or name
+    const [rows] = await this.db.execute(
+      `SELECT * FROM employees 
+       WHERE \`AC-No.\` = ? 
+          OR full_name_english LIKE ?
+          OR full_name_bangla LIKE ?
+       LIMIT 1`,
+      [identifier, `%${identifier}%`, `%${identifier}%`]
+    );
+    
+    const employees = rows as any[];
+    return employees.length > 0 ? this.transformToCamelCase(employees[0]) : null;
+  }
+
+  // Transform database row (snake_case / CSV columns) to Employee interface (camelCase)
+  private transformToCamelCase(row: any): Employee {
+    if (!row) return null as any;
+    // Get all 4 identity columns from CSV data
+    const empNo = row['Emp No.'] || row.empNo || row.emp_no || '';
+    const acNo = row['AC-No.'] || row.acNo || row.ac_no || row.punch_card || '';
+    const no = row['No.'] || row.no || row.emp_code || '';
+    const name = row['Name'] || row.name || row.full_name_english || row.full_name_bangla || '';
+    return {
+      id: row.id,
+      // 4 Identity Columns (from csv_employees - all stored, AC-No. is the lookup key)
+      empNo,
+      acNo,
+      no,
+      name,
+      // Legacy fields
+      emp_code: no,
+      emp_id: empNo,
+      punch_card: acNo,
+      full_name_bangla: name,
+      full_name_english: name,
+      fathers_name_bangla: row.fathers_name_bangla,
+      fathers_name: row.fathers_name,
+      mothers_name_bangla: row.mothers_name_bangla,
+      mothers_name: row.mothers_name,
+      spouse_name_bangla: row.spouse_name_bangla,
+      spouse_name: row.spouse_name,
+      blood_group: row.blood_group,
+      gender: row.gender,
+      birth_place: row.birth_place,
+      date_of_birth: row.date_of_birth,
+      age: row.age,
+      religion: row.religion,
+      marital_status: row.marital_status,
+      nationality: row.nationality,
+      national_id: row.national_id,
+      mobile_no: row.mobile_no,
+      category: row.category,
+      company: row.company,
+      location: row.location,
+      division: row.division,
+      department: row.department,
+      section: row.section,
+      subsection: row.subsection,
+      designation_level: row.designation_level,
+      designation: row.designation,
+      functional_superior: row.functional_superior,
+      leave_app_process_use: row.leave_app_process_use,
+      leave_approving_authority: row.leave_approving_authority,
+      admin_superior: row.admin_superior,
+      joining_date: row.joining_date,
+      provisional_tenor: row.provisional_tenor,
+      remark: row.remark,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
   }
 }

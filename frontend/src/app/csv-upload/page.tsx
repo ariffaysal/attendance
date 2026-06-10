@@ -26,8 +26,8 @@ export default function CsvUploadPage() {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (!file.name.endsWith('.csv')) {
-        setError('Please select a CSV file');
+      if (!file.name.match(/\.(csv|xls|xlsx)$/i)) {
+        setError('Please select a CSV or Excel file');
         setSelectedFile(null);
         return;
       }
@@ -70,11 +70,11 @@ export default function CsvUploadPage() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     const file = e.dataTransfer.files?.[0];
     if (file) {
-      if (!file.name.endsWith('.csv')) {
-        setError('Please drop a CSV file');
+      if (!file.name.match(/\.(csv|xls|xlsx)$/i)) {
+        setError('Please drop a CSV or Excel file');
         return;
       }
       setSelectedFile(file);
@@ -93,7 +93,7 @@ export default function CsvUploadPage() {
             Upload Attendance CSV
           </h2>
           <p className="text-muted mb-0">
-            Import monthly attendance data when the biometric machine is offline
+            Import monthly attendance data from CSV or Excel files
           </p>
         </div>
         <Button variant="outline-secondary" onClick={() => router.push('/')}>
@@ -101,22 +101,6 @@ export default function CsvUploadPage() {
           Back to Dashboard
         </Button>
       </div>
-
-      {/* Info Card */}
-      <Card className="mb-4 border-info">
-        <Card.Body>
-          <h5 className="text-info">
-            <FontAwesomeIcon icon={faExclamationTriangle} className="me-2" />
-            When to use this feature
-          </h5>
-          <ul className="mb-0">
-            <li>Use this when the <strong>ZKTeco attendance machine is temporarily offline or not accessible</strong></li>
-            <li>Upload your monthly CSV export from the attendance software</li>
-            <li>The system will regenerate dashboard stats, job cards, and reports from the uploaded data</li>
-            <li>CSV format should match the standard ZKTeco export format</li>
-          </ul>
-        </Card.Body>
-      </Card>
 
       {/* Upload Area */}
       <Card className="mb-4">
@@ -183,21 +167,21 @@ export default function CsvUploadPage() {
               </div>
             ) : (
               <div>
-                <h5 className="text-muted mb-2">Drag & drop your CSV file here</h5>
+                <h5 className="text-muted mb-2">Drag & drop your CSV or Excel file here</h5>
                 <p className="text-muted mb-3">or click to browse</p>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.xls,.xlsx"
                   onChange={handleFileSelect}
                   style={{ display: 'none' }}
                 />
-                <Button 
+                <Button
                   variant="primary"
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <FontAwesomeIcon icon={faFileCsv} className="me-2" />
-                  Select CSV File
+                  Select File
                 </Button>
               </div>
             )}
@@ -303,7 +287,7 @@ export default function CsvUploadPage() {
         </Card.Header>
         <Card.Body>
           <p className="text-muted mb-3">
-            Your CSV file <strong>must have exactly these columns</strong> in the header row (standard ZKTeco export format):
+            Your CSV file <strong>must have exactly these columns</strong> in the header row:
           </p>
           <div className="bg-light p-3 rounded mb-3" style={{ fontFamily: 'monospace', fontSize: '0.85rem', overflowX: 'auto' }}>
             Status, Emp No., AC-No., No., Name, Auto-Assign, Date, Timetable, On duty, Off duty, Clock In, Clock Out, Normal, Real time, Late, Early, Absent, OT Time, Work Time, Exception, Must C/In, Must C/Out, Department, NDays, WeekEnd, Holiday, ATT_Time, NDays_OT, WeekEnd_OT, Holiday_OT

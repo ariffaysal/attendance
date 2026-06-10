@@ -28,17 +28,6 @@ export class CreateRuleDto {
   @IsOptional()
   is_active?: boolean = true;
 
-  @IsNumber()
-  @IsOptional()
-  priority?: number = 100;
-
-  @IsEnum(['standard', 'exception', 'override'])
-  @IsOptional()
-  rule_type?: 'standard' | 'exception' | 'override' = 'standard';
-
-  @IsEnum(['AND', 'OR'])
-  @IsOptional()
-  condition_logic?: 'AND' | 'OR' = 'AND';
 }
 
 export class UpdateRuleDto {
@@ -71,15 +60,4 @@ export class UpdateRuleDto {
   @IsOptional()
   is_active?: boolean;
 
-  @IsNumber()
-  @IsOptional()
-  priority?: number;
-
-  @IsEnum(['standard', 'exception', 'override'])
-  @IsOptional()
-  rule_type?: 'standard' | 'exception' | 'override';
-
-  @IsEnum(['AND', 'OR'])
-  @IsOptional()
-  condition_logic?: 'AND' | 'OR';
 }

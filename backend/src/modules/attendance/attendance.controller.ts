@@ -1,38 +1,17 @@
-import { Controller, Post, Get, Query, Body, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Get, Query, Param, Body, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiQuery, ApiConsumes } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { AttendanceService } from './attendance.service';
 import { SearchAttendanceDto } from './dto/search-attendance.dto';
-import { ZktecoMachineService } from '../zkteco-machine/zkteco-machine.service';
 
 @ApiTags('Attendance')
 @Controller('attendance')
 export class AttendanceController {
   constructor(
     private readonly attendanceService: AttendanceService,
-    private readonly zktecoService: ZktecoMachineService,
   ) {}
-
-  @Post('sync')
-  @ApiOperation({ summary: 'Sync real-time logs to attendance table' })
-  @ApiQuery({ name: 'fromDate', required: false, description: 'Start date (YYYY-MM-DD)' })
-  @ApiQuery({ name: 'toDate', required: false, description: 'End date (YYYY-MM-DD)' })
-  async syncAttendance(
-    @Query('fromDate') fromDate?: string,
-    @Query('toDate') toDate?: string,
-  ) {
-    console.log(`[Sync] fromDate: ${fromDate}, toDate: ${toDate}`);
-    try {
-      const result = await this.attendanceService.syncRealtimeToAttendance(fromDate, toDate);
-      console.log(`[Sync] Result:`, result);
-      return result;
-    } catch (error) {
-      console.error(`[Sync] Error:`, error);
-      throw error;
-    }
-  }
 
   @Post('upload-csv')
   @ApiOperation({ summary: 'Upload monthly attendance CSV or Excel file when machine is offline' })
@@ -59,9 +38,9 @@ export class AttendanceController {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
-    
+
     console.log(`[File Upload] Processing file: ${file.originalname}, size: ${file.size} bytes`);
-    
+
     try {
       const result = await this.attendanceService.processUploadFile(file.path, file.originalname);
       return {
@@ -70,26 +49,10 @@ export class AttendanceController {
         ...result,
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[File Upload] Error:`, error);
-      throw new BadRequestException(`Failed to process file: ${error.message}`);
+      throw new BadRequestException(`Failed to process file: ${errorMessage}`);
     }
-  }
-
-  @Get('today')
-  @ApiOperation({ summary: "Get today's real-time punches" })
-  async getTodayPunches() {
-    return this.attendanceService.getTodayPunches();
-  }
-
-  @Post('test-punch')
-  @ApiOperation({ summary: 'Create a test punch (for debugging)' })
-  @ApiQuery({ name: 'userId', required: false })
-  @ApiQuery({ name: 'name', required: false })
-  async createTestPunch(
-    @Query('userId') userId?: string,
-    @Query('name') name?: string,
-  ) {
-    return this.attendanceService.createTestPunch(userId || '101', name || 'Test User');
   }
 
   @Get('records')
@@ -116,12 +79,6 @@ export class AttendanceController {
     return this.attendanceService.getMonthlyData(query);
   }
 
-  @Get('users')
-  @ApiOperation({ summary: 'Get all users/employees from database' })
-  async getUsers() {
-    return this.attendanceService.getAllUsers();
-  }
-
   @Post('clear-data')
   @ApiOperation({ summary: 'Clear all attendance data (logs, real_time_logs, attendance tables)' })
   async clearData() {
@@ -130,9 +87,66 @@ export class AttendanceController {
 
   @Get('salary-attendance')
   @ApiOperation({ summary: 'Get attendance summary for salary sheet' })
-  @ApiQuery({ name: 'month', required: true, description: 'Month in YYYY-MM format' })
-  async getSalaryAttendance(@Query('month') month: string) {
-    return this.attendanceService.getSalaryAttendance(month);
+  @ApiQuery({ name: 'fromDate', required: true, description: 'Start date in YYYY-MM-DD format' })
+  @ApiQuery({ name: 'toDate', required: true, description: 'End date in YYYY-MM-DD format' })
+  async getSalaryAttendance(
+    @Query('fromDate') fromDate: string,
+    @Query('toDate') toDate: string,
+  ) {
+    return this.attendanceService.getSalaryAttendance(fromDate, toDate);
+  }
+
+  // ==========================================
+  // CSV EMPLOYEES ENDPOINTS
+  // ==========================================
+
+  @Get('csv-employees')
+  @ApiOperation({ summary: 'Get all unique employees from CSV uploads' })
+  @ApiQuery({ name: 'search', required: false, description: 'Search by name or employee code' })
+  async getCsvEmployees(@Query('search') search?: string) {
+    return this.attendanceService.getCsvEmployees(search);
+  }
+
+  @Get('csv-employees/ac-no/:acNo')
+  @ApiOperation({ summary: 'Get a CSV employee by AC-No.' })
+  async getCsvEmployeeByACNo(@Param('acNo') acNo: string) {
+    return this.attendanceService.getCsvEmployeeByCode(acNo);
+  }
+
+  @Get('csv-employees/by-code/:empCode')
+  @ApiOperation({ summary: 'Get a CSV employee by employee code (No.)' })
+  async getCsvEmployeeByCode(@Param('empCode') empCode: string) {
+    return this.attendanceService.getCsvEmployeeByCode(empCode);
+  }
+
+  @Get('csv-employees/lookup/:identifier')
+  @ApiOperation({ summary: 'Lookup CSV employee by any identifier (Emp No., AC-No., No., or Name)' })
+  async lookupCsvEmployee(@Param('identifier') identifier: string) {
+    return this.attendanceService.lookupCsvEmployee(identifier);
+  }
+
+  @Post('remove-employee-data')
+  @ApiOperation({ summary: 'Remove employee data (No., Name, Department) from employees table' })
+  async removeEmployeeData(@Body() body: { acNos: string[] }) {
+    return this.attendanceService.removeEmployeeData(body.acNos);
+  }
+
+  @Post('clear-logs')
+  @ApiOperation({ summary: 'Clear all data from logs table before reupload' })
+  async clearLogs() {
+    return this.attendanceService.clearLogs();
+  }
+
+  @Post('sync-policy-to-logs')
+  @ApiOperation({ summary: 'Sync shift_policy_rule from employee_policy_tagging to logs table' })
+  async syncPolicyToLogs(@Body() body: { empCode?: string }) {
+    return this.attendanceService.syncPolicyToLogs(body.empCode);
+  }
+
+  @Post('recalculate-late')
+  @ApiOperation({ summary: 'Recalculate calculated_late for employee based on current shift_policy_rule' })
+  async recalculateLate(@Body() body: { empCode: string }) {
+    return this.attendanceService.recalculateAllLateForEmployee(body.empCode);
   }
 
 }

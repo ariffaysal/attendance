@@ -10,6 +10,11 @@ export const employeeEducationService = {
     return response.data;
   },
 
+  async getByACNo(acNo: string): Promise<EmployeeEducation[]> {
+    const response = await axios.get(`${API_URL}/employee-education/by-acno/${acNo}`);
+    return response.data;
+  },
+
   async getByEmpCode(empCode: string): Promise<EmployeeEducation[]> {
     const response = await axios.get(`${API_URL}/employee-education/by-empcode/${empCode}`);
     return response.data;

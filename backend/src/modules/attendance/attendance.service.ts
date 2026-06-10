@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { SQL_CONNECTION } from '../../database/database.module';
 import * as fs from 'fs';
-import * as csv from 'csv-parser';
+import csvParser from 'csv-parser';
 import {
   AttendanceStats,
   PaginationData,
@@ -14,25 +14,10 @@ import {
 } from './interfaces/attendance.interface';
 import { SearchAttendanceDto } from './dto/search-attendance.dto';
 
-// Real-time log entry interface
-export interface RealtimeLogEntry {
-  id: number;
-  device_user_id: string;
-  emp_code: string | null;
-  employee_name: string | null;
-  punch_time: Date;
-  verify_type: string;
-  status: 'CheckIn' | 'CheckOut';
-  device_ip: string;
-  created_at: Date;
-}
-
 // Attendance record for frontend display
 export interface AttendanceDisplayRecord {
   status: 'Present' | 'Absent';
-  empNo: string;
   acNo: string;
-  no: string;
   name: string;
   date: string;
   clockIn: string;
@@ -41,100 +26,361 @@ export interface AttendanceDisplayRecord {
   department: string;
 }
 
+/**
+ * HELPER: Normalizes CSV headers to handle variations automatically
+ */
+class CsvColumnMapper {
+  private mapStore: Map<string, string> = new Map();
+
+  constructor(headers: string[]) {
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    headers.forEach(original => {
+      const norm = normalize(original);
+      if (norm.includes('empno') || norm.includes('employeeno')) this.mapStore.set('empNo', original);
+      if (norm.includes('acno')) this.mapStore.set('acNo', original);
+      if (norm.includes('no') && !this.mapStore.has('no')) this.mapStore.set('no', original);
+      if (norm.includes('name')) this.mapStore.set('name', original);
+      if (norm.includes('date')) this.mapStore.set('date', original);
+      if (norm.includes('clockin') || norm === 'in' || (norm.includes('clock') && norm.includes('in'))) this.mapStore.set('clockIn', original);
+      if (norm.includes('clockout') || norm === 'out' || (norm.includes('clock') && norm.includes('out'))) this.mapStore.set('clockOut', original);
+      if (norm.includes('dept') || norm.includes('department')) this.mapStore.set('department', original);
+      if (norm.includes('status')) this.mapStore.set('status', original);
+      if (norm.includes('absent')) this.mapStore.set('absent', original);
+    });
+  }
+
+  getValue(record: any, key: string): string {
+    const originalHeader = this.mapStore.get(key);
+    return originalHeader ? (record[originalHeader] || '').toString().trim() : '';
+  }
+
+  has(key: string): boolean {
+    return this.mapStore.has(key);
+  }
+}
+
 @Injectable()
 export class AttendanceService {
   constructor(
-    @Inject(SQL_CONNECTION) private readonly db: mysql.Connection,
+    @Inject(SQL_CONNECTION) private readonly db: mysql.Pool,
     private readonly configService: ConfigService,
-  ) {}
+  ) {
+    // Initialize custom shifts on service startup
+    this.initializeCustomShifts().catch(err => 
+      console.error('[AttendanceService] Failed to initialize shifts:', err)
+    );
+  }
 
   /**
-   * Sync real_time_logs to attendance table
-   * This aggregates punches into daily in_time/out_time records
+   * STRICT Employee Resolution: Uses AC-No. as single identity
+   * Returns all 4 identity columns for display/storage, but lookup is by AC-No. only
    */
-  async syncRealtimeToAttendance(fromDate?: string, toDate?: string): Promise<{ processed: number; message: string }> {
-    const startDate = fromDate || new Date().toISOString().split('T')[0];
-    const endDate = toDate || startDate;
+  private async resolveEmployeeStrict(row: { acNo: string }): Promise<any | null> {
+    if (!row.acNo || row.acNo === '') return null;
+    
+    const [rows] = await this.db.execute(
+      `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, Department 
+       FROM csv_employees WHERE \`AC-No.\` = ? LIMIT 1`,
+      [row.acNo]
+    );
+    return (rows as any[]).length > 0 ? (rows as any[])[0] : null;
+  }
+
+  /**
+   * Sync unique employees from CSV records to csv_employees table
+   * Extracts unique AC-No. values and inserts them if not exists
+   * Stores all 4 identity columns but AC-No. is the lookup key
+   */
+  private async syncCsvEmployeesFromRecords(records: any[], mapper: CsvColumnMapper): Promise<void> {
+    // Extract unique employees by AC-No. from records
+    const uniqueEmployees = new Map<string, { empNo: string, no: string, name: string, department: string }>();
+    
+    for (const record of records) {
+      const acNo = mapper.getValue(record, 'acNo');
+      const empNo = mapper.getValue(record, 'empNo') || '';
+      const no = mapper.getValue(record, 'no') || '';
+      const name = mapper.getValue(record, 'name') || '';
+      const department = mapper.getValue(record, 'department') || '';
+      if (acNo && acNo.trim() !== '') {
+        uniqueEmployees.set(acNo, { empNo, no, name, department });
+      }
+    }
+    
+    if (uniqueEmployees.size === 0) {
+      console.log('[CSV Import] No valid AC-No. values found in records');
+      return;
+    }
+    
+    console.log(`[CSV Import] Found ${uniqueEmployees.size} unique employees to sync to csv_employees`);
+    
+    // Insert or update each unique employee
+    let inserted = 0;
+    let existing = 0;
+    
+    for (const [acNo, data] of uniqueEmployees) {
+      try {
+        // Check if already exists
+        const [rows] = await this.db.execute(
+          `SELECT id FROM csv_employees WHERE \`AC-No.\` = ? LIMIT 1`,
+          [acNo]
+        );
+        
+        if ((rows as any[]).length === 0) {
+          // Insert new employee with all 4 identity columns
+          await this.db.execute(
+            `INSERT INTO csv_employees (\`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, Department, is_active) 
+             VALUES (?, ?, ?, ?, ?, 1)`,
+            [data.empNo, acNo, data.no, data.name, data.department]
+          );
+          inserted++;
+        } else {
+          existing++;
+        }
+      } catch (err: any) {
+        console.error(`[CSV Import] Error syncing AC-No. ${acNo}:`, err.message);
+      }
+    }
+    
+    console.log(`[CSV Import] csv_employees sync complete: ${inserted} inserted, ${existing} already exist`);
+  }
+
+  /**
+   * Initialize/update shifts to match the user's requirements
+   * Updates EXISTING shifts in the database with correct times
+   */
+  private async initializeCustomShifts(): Promise<void> {
+    // Update existing shifts to have EXACT names matching policy dropdown
+    // This ensures shift_name in DB = shift_policy_rule in employee_policy_tagging
+    const shiftUpdates = [
+      {
+        shift_code: 'MORNING_8AM',  // "Morning Shift (8 AM - 4 PM)" - exactly as in dropdown
+        shift_name: 'Morning Shift (8 AM - 4 PM)',
+        start_time: '08:00:00',
+        end_time: '16:00:00',
+        grace_period_minutes: 45,
+        is_night_shift: false,
+      },
+      {
+        shift_code: 'EVENING_3PM',  // "Evening Shift (3 PM - 11 PM)"
+        shift_name: 'Evening Shift (3 PM - 11 PM)',
+        start_time: '15:00:00',
+        end_time: '23:00:00',
+        grace_period_minutes: 45,
+        is_night_shift: false,
+      },
+      {
+        shift_code: 'NIGHT_11PM',  // "Night Shift (11PM - 8 AM)" - note: no space in 11PM
+        shift_name: 'Night Shift (11PM - 8 AM)',
+        start_time: '23:00:00',
+        end_time: '08:00:00',
+        grace_period_minutes: 45,
+        is_night_shift: true,
+      },
+      {
+        shift_code: 'GENERAL_10AM',  // "General shift (10 AM - 6 PM)" - lowercase 'shift'
+        shift_name: 'General shift (10 AM - 6 PM)',
+        start_time: '10:00:00',
+        end_time: '18:00:00',
+        grace_period_minutes: 45,
+        is_night_shift: false,
+      },
+      {
+        shift_code: 'RAMADAN_9AM',  // "Ramadan Shift (9 AM - 4 PM)"
+        shift_name: 'Ramadan Shift (9 AM - 4 PM)',
+        start_time: '09:00:00',
+        end_time: '16:00:00',
+        grace_period_minutes: 45,
+        is_night_shift: false,
+      },
+    ];
 
     try {
-      // Get all unprocessed real-time logs within date range
-      const [logs] = await this.db.execute(
-        `SELECT * FROM real_time_logs 
-         WHERE DATE(punch_time) BETWEEN ? AND ? 
-         AND (processed = 0 OR processed IS NULL)
-         ORDER BY device_user_id, punch_time`,
-        [startDate, endDate]
-      );
-
-      const records = logs as RealtimeLogEntry[];
-      let processed = 0;
-
-      // Group by employee and date
-      const grouped = this.groupRealtimeLogsByEmployeeDate(records);
-
-      for (const [key, punches] of Object.entries(grouped)) {
-        const [empCode, dateStr] = key.split('_');
-        const date = new Date(dateStr);
-        const day = date.getDate();
-        const month = date.getMonth() + 1;
-        const year = date.getFullYear();
-
-        // Sort punches by time
-        punches.sort((a, b) => new Date(a.punch_time).getTime() - new Date(b.punch_time).getTime());
-
-        // First punch = CheckIn, Last punch = CheckOut
-        const firstPunch = punches[0];
-        const lastPunch = punches[punches.length - 1];
-
-        const inTime = this.formatTime(firstPunch.punch_time);
-        const outTime = punches.length > 1 ? this.formatTime(lastPunch.punch_time) : '';
-
-        // Calculate late (assuming 9:00 AM is standard start time)
-        const lateMinutes = this.calculateLateMinutes(firstPunch.punch_time, '09:00');
-        const late = lateMinutes > 0 ? this.minutesToTimeString(lateMinutes) : '';
-
-        // Insert or update attendance record
+      for (const shift of shiftUpdates) {
         await this.db.execute(
-          `INSERT INTO attendance (emp_id, day, month, year, status, in_time, out_time, ot) 
-           VALUES (?, ?, ?, ?, 'P', ?, ?, '')
-           ON DUPLICATE KEY UPDATE 
-           in_time = VALUES(in_time),
-           out_time = VALUES(out_time),
-           status = 'P'`,
-          [empCode, day, month, year, inTime, outTime]
+          `INSERT INTO shifts (shift_code, shift_name, start_time, end_time, grace_period_minutes, is_night_shift, is_active)
+           VALUES (?, ?, ?, ?, ?, ?, TRUE)
+           ON DUPLICATE KEY UPDATE
+             shift_name = VALUES(shift_name),
+             start_time = VALUES(start_time),
+             end_time = VALUES(end_time),
+             grace_period_minutes = VALUES(grace_period_minutes),
+             is_night_shift = VALUES(is_night_shift),
+             is_active = TRUE,
+             updated_at = NOW()`,
+          [shift.shift_code, shift.shift_name, shift.start_time, shift.end_time, shift.grace_period_minutes, shift.is_night_shift]
         );
-
-        // Mark logs as processed
-        const logIds = punches.map(p => p.id);
-        if (logIds.length > 0) {
-          await this.db.execute(
-            `UPDATE real_time_logs SET processed = 1 WHERE id IN (${logIds.join(',')})`
-          );
-        }
-
-        processed++;
+        console.log(`[AttendanceService] Upserted shift: ${shift.shift_code} (${shift.shift_name}) -> ${shift.start_time}-${shift.end_time}`);
       }
-
-      return { processed, message: `Synced ${processed} attendance records` };
+      console.log('[AttendanceService] Custom shifts initialized successfully');
     } catch (error) {
-      console.error('Sync error:', error);
-      throw new Error(`Failed to sync attendance: ${error.message}`);
+      console.error('[AttendanceService] Error initializing custom shifts:', error);
     }
   }
 
   /**
-   * Get attendance records from real_time_logs (direct punch data)
+   * Get employee policies from employee_policy_tagging
+   */
+  private async getEmployeePolicies(empCode: string): Promise<{
+    lateDeductionPolicy: string;
+    absentDeductionPolicy: string;
+    shiftPolicyRule: string;
+  }> {
+    try {
+      // Try multiple code variations
+      const variations = [empCode];
+      if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+        variations.push(`EMP${empCode.substring(1)}`);
+        variations.push(empCode.substring(1));
+      } else if (!empCode.startsWith('EMP')) {
+        variations.push(`EMP${empCode}`);
+        variations.push(`E${empCode}`);
+      }
+
+      for (const codeVar of variations) {
+        const [rows] = await this.db.execute(
+          `SELECT late_deduction_policy_rule, absent_deduction_policy_rule, shift_policy_rule
+           FROM employee_policy_tagging
+           WHERE \`AC-No.\` = ?
+           ORDER BY id DESC LIMIT 1`,
+          [codeVar]
+        );
+        
+        const policies = rows as any[];
+        if (policies.length > 0) {
+          return {
+            lateDeductionPolicy: policies[0].late_deduction_policy_rule || 'N/A',
+            absentDeductionPolicy: policies[0].absent_deduction_policy_rule || 'N/A',
+            shiftPolicyRule: policies[0].shift_policy_rule || 'N/A'
+          };
+        }
+      }
+    } catch (error: any) {
+      console.log(`[Policies] Error fetching for ${empCode}:`, error.message);
+    }
+    
+    return {
+      lateDeductionPolicy: 'N/A',
+      absentDeductionPolicy: 'N/A',
+      shiftPolicyRule: 'N/A'
+    };
+  }
+
+  /**
+   * Get employee gross salary from employee_salary_information
+   */
+  private async getEmployeeGrossSalary(empCode: string): Promise<number> {
+    try {
+      const variations = [empCode];
+      if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+        variations.push(`EMP${empCode.substring(1)}`);
+        variations.push(empCode.substring(1));
+      } else if (!empCode.startsWith('EMP')) {
+        variations.push(`EMP${empCode}`);
+        variations.push(`E${empCode}`);
+      }
+
+      for (const codeVar of variations) {
+        const [rows] = await this.db.execute(
+          `SELECT gross_salary FROM employee_salary_information
+           WHERE \`AC-No.\` = ?
+           LIMIT 1`,
+          [codeVar]
+        );
+        
+        const salaryData = rows as any[];
+        if (salaryData.length > 0 && salaryData[0].gross_salary) {
+          return parseFloat(salaryData[0].gross_salary) || 0;
+        }
+      }
+    } catch (error: any) {
+      console.log(`[Salary] Error fetching gross for ${empCode}:`, error.message);
+    }
+    
+    return 0;
+  }
+
+  /**
+   * Get employee shift information including start time with grace period
+   */
+  private async getEmployeeShiftInfo(empCode: string, date: Date, empName?: string): Promise<{
+    shiftName: string;
+    startTime: string;
+    startTimeWithGrace: string;
+    gracePeriod: number;
+  }> {
+    const shiftStartWithGrace = await this.getEmployeeShiftStartTime(empCode, date, empName);
+    
+    // Parse the grace period from the returned time
+    // Default grace is 45 minutes
+    let gracePeriod = 45;
+    
+    // Try to get actual shift info from database
+    try {
+      const policies = await this.getEmployeePolicies(empCode);
+      if (policies.shiftPolicyRule && policies.shiftPolicyRule !== 'N/A') {
+        const shift = await this.getShiftFromPolicyRule(policies.shiftPolicyRule);
+        if (shift) {
+          gracePeriod = shift.grace_period_minutes || 45;
+          // Calculate start time with grace
+          const [shiftHours, shiftMinutes] = shift.start_time.split(':').map(Number);
+          const totalMinutesWithGrace = shiftHours * 60 + shiftMinutes + gracePeriod;
+          const graceHours = Math.floor(totalMinutesWithGrace / 60) % 24;
+          const graceMins = totalMinutesWithGrace % 60;
+          const startTimeWithGrace = `${String(graceHours).padStart(2, '0')}:${String(graceMins).padStart(2, '0')}`;
+          
+          return {
+            shiftName: shift.shift_name,
+            startTime: shift.start_time,
+            startTimeWithGrace: startTimeWithGrace,
+            gracePeriod
+          };
+        }
+      }
+    } catch (e) {
+      // Fallback to defaults
+    }
+    
+    // Calculate original start time from shiftStartWithGrace (which includes grace)
+    const [hours, minutes] = shiftStartWithGrace.split(':').map(Number);
+    const totalMinutes = hours * 60 + minutes - gracePeriod;
+    const originalHours = Math.floor(totalMinutes / 60) % 24;
+    const originalMinutes = totalMinutes % 60;
+    const originalStartTime = `${String(originalHours).padStart(2, '0')}:${String(originalMinutes).padStart(2, '0')}`;
+    
+    return {
+      shiftName: 'General shift (10 AM - 6 PM)',
+      startTime: originalStartTime,
+      startTimeWithGrace: shiftStartWithGrace,
+      gracePeriod
+    };
+  }
+
+  /**
+   * Get attendance records from logs table (CSV data)
    */
   async getRecords(dto: SearchAttendanceDto): Promise<PaginationData<AttendanceDisplayRecord>> {
-    const allRecords = await this.loadFromRealtimeLogs(dto);
+    const allRecords = await this.loadFromLogsTable(dto);
     const perPage = 20;
     const total = allRecords.length;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const currentPage = Math.min(Math.max(1, dto.page || 1), totalPages);
     const offset = (currentPage - 1) * perPage;
 
+    // Convert string[][] to AttendanceDisplayRecord format
+    const displayRecords = allRecords.slice(offset, offset + perPage).map(record => ({
+      status: record[0] as 'Present' | 'Absent',
+      acNo: record[2] || '',
+      name: record[4] || '',
+      date: record[6] || '',
+      clockIn: record[10] || '',
+      clockOut: record[11] || '',
+      late: record[14] || '',
+      department: record[22] || '',
+    }));
+
     return {
-      records: allRecords.slice(offset, offset + perPage),
+      records: displayRecords,
       total,
       currentPage,
       totalPages,
@@ -144,11 +390,13 @@ export class AttendanceService {
 
   /**
    * Get attendance statistics
+   * Uses attendance table (CSV data) instead of real-time logs
    */
   async getStats(dto: SearchAttendanceDto): Promise<AttendanceStats & { total: number; fromDate?: string; toDate?: string }> {
-    const records = await this.loadFromRealtimeLogs(dto);
-    const present = records.filter(r => r.status === 'Present').length;
-    const absent = records.filter(r => r.status === 'Absent').length;
+    // Use logs table which contains CSV data with calculated fields
+    const records = await this.loadFromLogsTable(dto);
+    const present = records.filter(r => r[0] === 'Present').length;
+    const absent = records.filter(r => r[0] === 'Absent').length;
 
     return {
       present,
@@ -161,21 +409,24 @@ export class AttendanceService {
 
   /**
    * Get job cards - aggregate by employee
+   * Uses only CSV logs data (not punch machine data)
+   * Shows stored calculated_late from logs table
    */
   async getJobCards(dto: SearchAttendanceDto): Promise<JobCardEmployee[]> {
-    // Use the attendance table for job cards (daily aggregated data)
-    const records = await this.loadFromAttendanceTable(dto);
+    // Ensure view is set to job_card for CSV-only data
+    const jobCardDto = { ...dto, view: 'job_card' as const };
+    const records = await this.loadFromLogsTable(jobCardDto);
     const grouped = this.groupByEmployee(records);
 
-    return Object.entries(grouped).map(([empId, group]) => {
+    return Object.entries(grouped).map(([_, group]) => {
       const summary = this.calculateJobCardSummary(group.records, dto.fromDate, dto.toDate);
       const dailyRecords = this.buildDailyRecords(group.records, dto.fromDate, dto.toDate);
 
       return {
-        empId,
+        empNo: group.empNo,
+        acNo: group.acNo,
+        no: group.no,
         name: group.name,
-        empCode: group.empCode,
-        idCard: group.idCard,
         dept: group.dept,
         summary,
         records: dailyRecords,
@@ -185,9 +436,12 @@ export class AttendanceService {
 
   /**
    * Get monthly data
+   * Uses only CSV logs data (not punch machine data)
    */
   async getMonthlyData(dto: SearchAttendanceDto): Promise<{ year: number; month: string; ym: string; employees: MonthlyEmployee[] }[]> {
-    const records = await this.loadFromAttendanceTable(dto);
+    // Ensure view is set to monthly for CSV-only data
+    const monthlyDto = { ...dto, view: 'monthly' as const };
+    const records = await this.loadFromLogsTable(monthlyDto);
     const grouped = this.groupByEmployee(records);
 
     // Determine date range from records if no dates provided
@@ -208,7 +462,7 @@ export class AttendanceService {
     return segments.map(segment => {
       const employees: MonthlyEmployee[] = [];
 
-      Object.entries(grouped).forEach(([empId, group]) => {
+      Object.entries(grouped).forEach(([_, group]) => {
         const filtered = group.records.filter(r => {
           const recordDate = this.parseDate(r[6]); // date column
           return recordDate && recordDate.startsWith(segment.ym);
@@ -219,9 +473,10 @@ export class AttendanceService {
           const totals = this.calculateMonthlyTotals(daysData);
 
           employees.push({
-            empId,
+            empNo: group.empNo,
+            acNo: group.acNo,
+            no: group.no,
             name: group.name,
-            no: group.empCode,
             records: daysData,
             present: totals.present,
             absent: totals.absent,
@@ -235,53 +490,18 @@ export class AttendanceService {
   }
 
   /**
-   * Get today's real-time punches
-   */
-  async getTodayPunches(): Promise<RealtimeLogEntry[]> {
-    const today = new Date().toISOString().split('T')[0];
-    const [rows] = await this.db.execute(
-      `SELECT * FROM real_time_logs 
-       WHERE DATE(punch_time) = ? 
-       ORDER BY punch_time DESC`,
-      [today]
-    );
-    return rows as RealtimeLogEntry[];
-  }
-
-  /**
-   * Create a test punch for debugging
-   */
-  async createTestPunch(userId: string, name: string): Promise<{ success: boolean; message: string; id?: number }> {
-    try {
-      const [result] = await this.db.execute(
-        `INSERT INTO real_time_logs 
-         (device_user_id, emp_code, employee_name, punch_time, verify_type, status, device_ip) 
-         VALUES (?, ?, ?, NOW(), 'Test', 'CheckIn', '127.0.0.1')`,
-        [userId, userId, name]
-      );
-      const insertId = (result as any).insertId;
-      console.log(`✅ Test punch created: ID ${insertId} for user ${userId}`);
-      return { success: true, message: 'Test punch created', id: insertId };
-    } catch (error) {
-      console.error('❌ Failed to create test punch:', error);
-      return { success: false, message: error.message };
-    }
-  }
-
-  /**
    * Normalize date from device to MySQL datetime format
    * Handles Unix timestamps (seconds or milliseconds) and string dates
    */
   private normalizeDate(dateInput: any): string {
     if (!dateInput) return new Date().toISOString().slice(0, 19).replace('T', ' ');
     
-    // Check if it's a Unix timestamp (all digits)
-    if (typeof dateInput === 'number' || /^\d+$/.test(dateInput.toString().trim())) {
-      const num = parseInt(dateInput.toString(), 10);
+    // Check if it's a Unix timestamp (only if it's actually a number type, not string of digits)
+    if (typeof dateInput === 'number') {
       // If it's after year 2000, it's a valid timestamp
-      if (num > 946684800) { // Jan 1, 2000
+      if (dateInput > 946684800) { // Jan 1, 2000
         // Convert seconds to milliseconds if needed
-        const ms = num > 1000000000000 ? num : num * 1000;
+        const ms = dateInput > 1000000000000 ? dateInput : dateInput * 1000;
         return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
       }
     }
@@ -296,118 +516,7 @@ export class AttendanceService {
     return new Date().toISOString().slice(0, 19).replace('T', ' ');
   }
 
-  /**
-   * Save device logs to real_time_logs table
-   */
-  async saveDeviceLogs(deviceLogs: any[]): Promise<number> {
-    let savedCount = 0;
-    
-    // Log all items with their timestamps to debug
-    console.log(`[SaveDeviceLogs] Processing ${deviceLogs.length} logs from device:`);
-    deviceLogs.forEach((log, index) => {
-      const rawTime = log.record_time || log.attTime || log.timestamp || log.punchTime || 
-                     log.punch_time || log.time || log.dateTime || log.datetime;
-      const deviceUserId = log.user_id || log.userId || log.uid || log.deviceUserId || 
-                           log.employeeId || log.employee_id || log.id || log.ID;
-      console.log(`[SaveDeviceLogs] Log #${index}: user=${deviceUserId}, rawTime=${rawTime}, normalized=${this.normalizeDate(rawTime)}`);
-    });
-    
-    for (const log of deviceLogs) {
-      try {
-        // Extract data from device log format - handle various field names
-        const deviceUserId = log.user_id || log.userId || log.uid || log.deviceUserId || 
-                           log.employeeId || log.employee_id || log.id || log.ID;
-        
-        const rawTime = log.record_time || log.attTime || log.timestamp || log.punchTime || 
-                       log.punch_time || log.time || log.dateTime || log.datetime;
-        
-        // Normalize the date to proper MySQL format
-        const attTime = this.normalizeDate(rawTime);
-        
-        if (!deviceUserId || !attTime) {
-          console.log('[SaveDeviceLogs] Skipping - missing values:', { 
-            user_id: log.user_id, 
-            record_time: log.record_time,
-            deviceUserId: deviceUserId, 
-            attTime: attTime 
-          });
-          continue;
-        }
-        
-        // Check if this log already exists (prevent duplicates)
-        const [existing] = await this.db.execute(
-          `SELECT id FROM real_time_logs 
-           WHERE device_user_id = ? AND punch_time = ?`,
-          [deviceUserId, attTime]
-        );
-        
-        if (existing && (existing as any[]).length > 0) {
-          console.log(`[SaveDeviceLogs] Skipping duplicate: ${deviceUserId} at ${attTime}`);
-          continue; // Skip duplicate
-        }
-        
-        // Try to find employee by device ID
-        let empCode = null;
-        let empName = 'Unknown';
-        try {
-          const [empRows] = await this.db.execute(
-            `SELECT emp_code, full_name_english FROM employees WHERE emp_id = ? OR punch_card = ? LIMIT 1`,
-            [deviceUserId, deviceUserId]
-          );
-          const emp = (empRows as any[])[0];
-          if (emp) {
-            empCode = emp.emp_code;
-            empName = emp.full_name_english;
-          }
-        } catch (e) {
-          // employees table might not exist
-        }
-        
-        // Insert log
-        await this.db.execute(
-          `INSERT INTO real_time_logs 
-           (device_user_id, emp_code, employee_name, punch_time, verify_type, status, device_ip) 
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            deviceUserId,
-            empCode,
-            empName,
-            attTime,
-            log.verifyType || log.verify || 'Fingerprint',
-            'CheckIn', // Default status
-            '192.168.203.2'
-          ]
-        );
-        
-        savedCount++;
-        console.log(`[SaveDeviceLogs] Saved: ${empName} (${deviceUserId}) at ${attTime}`);
-      } catch (error) {
-        console.error('[SaveDeviceLogs] Error saving log:', log, error.message);
-      }
-    }
-    
-    console.log(`✅ Saved ${savedCount} device logs to real_time_logs`);
-    return savedCount;
-  }
-
   // Private helper methods
-
-  private groupRealtimeLogsByEmployeeDate(records: RealtimeLogEntry[]): Record<string, RealtimeLogEntry[]> {
-    const grouped: Record<string, RealtimeLogEntry[]> = {};
-    
-    for (const record of records) {
-      const empCode = record.emp_code || record.device_user_id;
-      const date = new Date(record.punch_time).toISOString().split('T')[0];
-      const key = `${empCode}_${date}`;
-      
-      if (!grouped[key]) {
-        grouped[key] = [];
-      }
-      grouped[key].push(record);
-    }
-    
-    return grouped;
-  }
 
   private formatTime(dateInput: Date | string): string {
     try {
@@ -441,6 +550,473 @@ export class AttendanceService {
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  }
+
+  /**
+   * Calculate late time for CSV import based on employee shift policy
+   * Returns late time string (e.g., "00:30") or empty string if not late
+   * 
+   * Logic:
+   * 1. Get employee's shift for the date (from assignment or policy)
+   * 2. Get shift start time + grace period
+   * 3. Compare actual clock-in time against shift start + grace
+   * 4. Return late duration if clock-in is after grace period
+   */
+  private async calculateLateForCsvImport(empCode: string, dateStr: string, clockIn: string, empName?: string): Promise<string> {
+    if (!clockIn || !clockIn.trim()) return '';
+    
+    try {
+      const clockTime = this.parseClockTimeString(clockIn);
+      if (!clockTime) {
+        console.log(`[CSV Import] Invalid clock-in format for ${empCode}: ${clockIn}`);
+        return '';
+      }
+
+      // Get shift start time with grace period already added (pass name for fallback matching)
+      const shiftStartWithGrace = await this.getEmployeeShiftStartTime(empCode, new Date(dateStr), empName);
+      
+      // Parse shift start time (already includes grace)
+      const [shiftHour, shiftMin] = shiftStartWithGrace.split(':').map(Number);
+      const shiftMinutes = shiftHour * 60 + shiftMin;
+      const clockMinutes = clockTime.hour * 60 + clockTime.minute;
+      
+      // Calculate late minutes
+      const lateMinutes = Math.max(0, clockMinutes - shiftMinutes);
+      
+      console.log(`[CSV Late Calc] ${empCode} on ${dateStr}: clockIn=${clockIn} (${clockMinutes}m), shiftWithGrace=${shiftStartWithGrace} (${shiftMinutes}m), late=${lateMinutes}m`);
+      
+      if (lateMinutes > 0) {
+        return this.minutesToTimeString(lateMinutes);
+      }
+      return '';
+    } catch (error) {
+      console.error(`[CSV Import] Error calculating late for ${empCode} on ${dateStr}:`, error);
+      return '';
+    }
+  }
+
+  /**
+   * Recalculate late for Job Card based on current policy (real-time calculation)
+   * This ensures late is calculated based on CURRENT policy, not stored value
+   */
+  private async recalculateLateForJobCard(
+    clockIn: string, 
+    currentPolicyRule: string
+  ): Promise<{ late: string; lateMinutes: number }> {
+    if (!clockIn || !clockIn.trim()) return { late: '', lateMinutes: 0 };
+    
+    try {
+      // Get shift from current policy
+      const shift = await this.getShiftFromPolicyRule(currentPolicyRule);
+      if (!shift) return { late: '', lateMinutes: 0 };
+      
+      // Calculate threshold (shift start + grace)
+      const [shiftHour, shiftMin] = shift.start_time.split(':').map(Number);
+      const totalMinutesWithGrace = shiftHour * 60 + shiftMin + shift.grace_period_minutes;
+      const thresholdHour = Math.floor(totalMinutesWithGrace / 60) % 24;
+      const thresholdMin = totalMinutesWithGrace % 60;
+      
+      // Parse clock-in
+      const [clockHour, clockMin] = clockIn.split(':').map(Number);
+      const clockMinutes = clockHour * 60 + clockMin;
+      const thresholdMinutes = thresholdHour * 60 + thresholdMin;
+      
+      // Calculate late
+      const lateMinutes = Math.max(0, clockMinutes - thresholdMinutes);
+      
+      if (lateMinutes > 0) {
+        const hours = Math.floor(lateMinutes / 60);
+        const mins = lateMinutes % 60;
+        return { 
+          late: `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
+          lateMinutes 
+        };
+      }
+      
+      return { late: '', lateMinutes: 0 };
+    } catch (error) {
+      return { late: '', lateMinutes: 0 };
+    }
+  }
+
+  /**
+   * Parse shift start time from policy rule string
+   * Format: "Morning Shift (8 A - 4 PM)" or "Morning Shift (8 AM - 4 PM)"
+   */
+  private parseShiftTimeFromPolicy(policyRule: string): { startTime: string; shiftName: string } | null {
+    if (!policyRule || policyRule === 'N/A') return null;
+    
+    // Extract time from parentheses: (8 A - 4 PM) or (8 AM - 4 PM) or (11PM - 8 AM)
+    // Handle variations: "8 A", "8 AM", "11PM" (with or without space, with or without M)
+    const timeMatch = policyRule.match(/\((\d+)\s*([AP]?)M?\s*-\s*(\d+)\s*([AP])M\)/i);
+    if (!timeMatch) return null;
+    
+    let startHour = parseInt(timeMatch[1], 10);
+    const startPeriod = timeMatch[2]; // A, P, or undefined
+    
+    // Convert to 24-hour format
+    if (startPeriod?.toUpperCase() === 'P' && startHour !== 12) {
+      startHour += 12;
+    } else if (startPeriod?.toUpperCase() === 'A' && startHour === 12) {
+      startHour = 0;
+    }
+    
+    // Extract shift name (text before the parentheses)
+    const shiftName = policyRule.split('(')[0].trim();
+    
+    const startTime = `${String(startHour).padStart(2, '0')}:00`;
+    return { startTime, shiftName };
+  }
+
+  /**
+   * Get shift details from database by matching policy rule to shift_name
+   * Now queries by exact shift_name match (e.g., "Morning Shift (8 A - 4 PM)")
+   * 
+   * Uses EXACT shift names from the database that match policy dropdown
+   */
+  private async getShiftFromPolicyRule(policyRule: string): Promise<{ start_time: string; grace_period_minutes: number; shift_code: string; shift_name: string } | null> {
+    if (!policyRule || policyRule === 'N/A') return null;
+    
+    try {
+      // Normalize the policy rule for matching (trim spaces, standardize case)
+      const normalizedPolicy = policyRule.trim();
+      
+      // Try exact match on shift_name first
+      const [exactMatch] = await this.db.execute(
+        `SELECT shift_code, start_time, grace_period_minutes, shift_name
+         FROM shifts 
+         WHERE shift_name = ? AND is_active = TRUE 
+         LIMIT 1`,
+        [normalizedPolicy]
+      );
+      
+      const exactShifts = exactMatch as any[];
+      if (exactShifts.length > 0) {
+        console.log(`[Shift] Exact match: "${normalizedPolicy}" -> ${exactShifts[0].shift_name} (${exactShifts[0].start_time} + ${exactShifts[0].grace_period_minutes}min grace)`);
+        return {
+          shift_code: exactShifts[0].shift_code,
+          shift_name: exactShifts[0].shift_name,
+          start_time: exactShifts[0].start_time,
+          grace_period_minutes: exactShifts[0].grace_period_minutes || 45,
+        };
+      }
+      
+      // Try normalized match (remove extra spaces around parentheses)
+      // "General shift ( 10 AM - 6 PM)" -> "General shift (10 AM - 6 PM)"
+      // "Morning Shift (8 A - 4 PM )" -> "Morning Shift (8 A - 4 PM)"
+      const compactPolicy = normalizedPolicy.replace(/\(\s+/g, '(').replace(/\s+\)/g, ')');
+      if (compactPolicy !== normalizedPolicy) {
+        const [compactMatch] = await this.db.execute(
+          `SELECT shift_code, start_time, grace_period_minutes, shift_name
+           FROM shifts 
+           WHERE shift_name = ? AND is_active = TRUE 
+           LIMIT 1`,
+          [compactPolicy]
+        );
+        
+        const compactShifts = compactMatch as any[];
+        if (compactShifts.length > 0) {
+          console.log(`[Shift] Compact match: "${normalizedPolicy}" -> "${compactPolicy}" -> ${compactShifts[0].shift_name} (${compactShifts[0].start_time} + ${compactShifts[0].grace_period_minutes}min grace)`);
+          return {
+            shift_code: compactShifts[0].shift_code,
+            shift_name: compactShifts[0].shift_name,
+            start_time: compactShifts[0].start_time,
+            grace_period_minutes: compactShifts[0].grace_period_minutes || 45,
+          };
+        }
+      }
+      
+      // Try with time pattern matching - extract shift type and match
+      // "Morning Shift (8 A - 4 PM )" -> try matching "Morning Shift%"
+      const shiftType = normalizedPolicy.split('(')[0].trim();
+      
+      // First: Try exact shift type match with wildcard for time
+      const [typeMatch] = await this.db.execute(
+        `SELECT shift_code, start_time, grace_period_minutes, shift_name
+         FROM shifts 
+         WHERE shift_name LIKE ? AND is_active = TRUE 
+         LIMIT 1`,
+        [`${shiftType}%`]
+      );
+      
+      const typeShifts = typeMatch as any[];
+      if (typeShifts.length > 0) {
+        console.log(`[Shift] Type match: "${normalizedPolicy}" (type: "${shiftType}%") -> ${typeShifts[0].shift_name} (${typeShifts[0].start_time} + ${typeShifts[0].grace_period_minutes}min grace)`);
+        return {
+          shift_code: typeShifts[0].shift_code,
+          shift_name: typeShifts[0].shift_name,
+          start_time: typeShifts[0].start_time,
+          grace_period_minutes: typeShifts[0].grace_period_minutes || 45,
+        };
+      }
+      
+      // Fallback: Try broader pattern match on shift_name
+      const [patternMatch] = await this.db.execute(
+        `SELECT shift_code, start_time, grace_period_minutes, shift_name
+         FROM shifts 
+         WHERE shift_name LIKE ? AND is_active = TRUE 
+         LIMIT 1`,
+        [`%${shiftType}%`]
+      );
+      
+      const patternShifts = patternMatch as any[];
+      if (patternShifts.length > 0) {
+        console.log(`[Shift] Pattern match: "${normalizedPolicy}" (type: "%${shiftType}%") -> ${patternShifts[0].shift_name} (${patternShifts[0].start_time} + ${patternShifts[0].grace_period_minutes}min grace)`);
+        return {
+          shift_code: patternShifts[0].shift_code,
+          shift_name: patternShifts[0].shift_name,
+          start_time: patternShifts[0].start_time,
+          grace_period_minutes: patternShifts[0].grace_period_minutes || 45,
+        };
+      }
+      
+      console.log(`[Shift] No shift found matching policy: "${normalizedPolicy}"`);
+      return null;
+    } catch (error) {
+      console.error('[Shift] Error looking up shift from policy rule:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get employee shift start time with fallback hierarchy:
+   * 1. Check specific date assignment in employee_shift_assignments
+   * 2. Check employee_policy_tagging shift_policy_rule (parse from text like "Morning Shift (8 AM - 4 PM)")
+   * 3. Return default 10:45 (General shift 10:00 + 45 min grace)
+   */
+  private async getEmployeeShiftStartTime(empCode: string, date: Date, empName?: string): Promise<string> {
+    try {
+      const dateStr = date.toISOString().split('T')[0];
+      
+      // 1. Check explicit shift assignment for this specific date
+      // Wrap in try-catch in case employee_shift_assignments table doesn't exist
+      try {
+        const [assignment] = await this.db.execute(
+          `SELECT s.start_time, s.grace_period_minutes, s.shift_code
+           FROM employee_shift_assignments esa
+           JOIN shifts s ON s.id = esa.shift_id
+           WHERE esa.emp_code = ? 
+             AND esa.assignment_date = ?
+             AND esa.is_off_day = FALSE
+             AND s.is_active = TRUE`,
+          [empCode, dateStr]
+        );
+        
+        const assignments = assignment as any[];
+        if (assignments.length > 0) {
+          const shift = assignments[0];
+          // Add grace period to shift start time
+          const [hours, minutes] = shift.start_time.split(':').map(Number);
+          const totalMinutes = hours * 60 + minutes + (shift.grace_period_minutes || 45);
+          const finalHours = Math.floor(totalMinutes / 60) % 24;
+          const finalMinutes = totalMinutes % 60;
+          const startTimeStr = `${String(finalHours).padStart(2, '0')}:${String(finalMinutes).padStart(2, '0')}`;
+          console.log(`[Shift] ${empCode} on ${dateStr}: Specific assignment - ${shift.shift_code} (${shift.start_time} + ${shift.grace_period_minutes}min grace) = ${startTimeStr}`);
+          return startTimeStr;
+        }
+      } catch (tableError: any) {
+        // Table doesn't exist or other error - silently skip to next method
+        if (tableError.code === 'ER_NO_SUCH_TABLE') {
+          console.log(`[Shift] employee_shift_assignments table not found, skipping to policy lookup`);
+        } else {
+          console.log(`[Shift] Error checking shift assignments: ${tableError.message}`);
+        }
+      }
+      
+      // 2. Check employee_policy_tagging for default shift assignment
+      // Try multiple emp_code variations to handle format mismatches
+      // E0015 -> try: E0015, EMP0015, 0015, 15
+      const variations = [empCode];
+      
+      // Add EMP prefix version (E0015 -> EMPE0015 or 0015 -> EMP0015)
+      if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+        variations.push(`EMP${empCode}`);       // E0015 -> EMPE0015
+        variations.push(`EMP${empCode.substring(1)}`); // E0015 -> EMP0015
+        variations.push(empCode.substring(1));   // E0015 -> 0015
+        variations.push(String(parseInt(empCode.substring(1), 10))); // E0015 -> 15
+      } else if (!empCode.startsWith('EMP')) {
+        variations.push(`EMP${empCode}`);        // 0015 -> EMP0015
+        variations.push(`E${empCode}`);          // 0015 -> E0015
+      }
+      
+      console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
+      console.log(`║  SHIFT LOOKUP: ${empCode} on ${dateStr}                      ║`);
+      console.log(`╚══════════════════════════════════════════════════════════════╝`);
+      console.log(`  Employee Name: ${empName || 'N/A'}`);
+      console.log(`  Code Variations: [${variations.join(', ')}]`);
+      
+      // Try each variation until we find a policy
+      let policy: any = null;
+      let matchedCode: string | null = null;
+      
+      // Step 1: Find employee in csv_employees by `AC-No.`
+      console.log(`\n  ── Step 1: Find employee in csv_employees ──`);
+      let csvEmployee: any = null;
+      
+      // Try by `AC-No.` (PRIMARY KEY)
+      for (const codeVar of variations) {
+        if (!codeVar) continue;
+        try {
+          const [csvEmpResult] = await this.db.execute(
+            `SELECT \`AC-No.\`, Department FROM csv_employees WHERE \`AC-No.\` = ?`,
+            [codeVar]
+          );
+          const csvEmps = csvEmpResult as any[];
+          if (csvEmps.length > 0) {
+            csvEmployee = csvEmps[0];
+            console.log(`     ✓ Found by AC-No.: ${csvEmployee['AC-No.']}`);
+            break;
+          }
+        } catch (e: any) {
+          console.log(`     ✗ AC-No. lookup error: ${e.message}`);
+        }
+      }
+      
+      if (!csvEmployee) {
+        console.log(`     ✗ Employee NOT found in csv_employees table`);
+      }
+      
+      // Step 2: Look up policy using `AC-No.` (primary lookup key)
+      if (csvEmployee) {
+        console.log(`\n  ── Step 2: Check policy for AC-No. = ${csvEmployee['AC-No.']} ──`);
+        try {
+          const [csvLinkResult] = await this.db.execute(
+            `SELECT shift_policy_rule, \`AC-No.\`
+             FROM employee_policy_tagging
+             WHERE \`AC-No.\` = ?
+               AND shift_policy_rule IS NOT NULL 
+               AND shift_policy_rule != ''
+               AND shift_policy_rule != 'N/A'
+             ORDER BY id DESC 
+             LIMIT 1`,
+            [csvEmployee['AC-No.']]
+          );
+          
+          const csvPolicies = csvLinkResult as any[];
+          if (csvPolicies.length > 0) {
+            policy = csvPolicies[0];
+            matchedCode = csvPolicies[0]['AC-No.'];
+            console.log(`     ✓ POLICY FOUND using AC-No.:`);
+            console.log(`       AC-No.: ${matchedCode}`);
+            console.log(`       Shift: ${policy.shift_policy_rule}`);
+          } else {
+            console.log(`     ✗ No policy found for AC-No.: ${csvEmployee['AC-No.']}`);
+          }
+        } catch (csvError: any) {
+          console.log(`     ✗ Error: ${csvError.message}`);
+        }
+      }
+      
+      if (!policy) {
+        console.log(`\n  ⚠️  NO POLICY FOUND in csv_employees linkage`);
+      }
+      
+      if (policy) {
+        console.log(`\n  ── Step 4: Match shift from policy ──`);
+        // 2. Try exact match with shift_name
+        const shift = await this.getShiftFromPolicyRule(policy.shift_policy_rule);
+        
+        if (shift) {
+          const graceMinutes = shift.grace_period_minutes || 45;
+          // Add grace period to start time
+          const [startHour, startMin] = shift.start_time.split(':').map(Number);
+          const startMinutes = startHour * 60 + startMin;
+          const totalMinutes = startMinutes + graceMinutes;
+          const finalHours = Math.floor(totalMinutes / 60) % 24;
+          const finalMinutes = totalMinutes % 60;
+          const startTimeStr = `${String(finalHours).padStart(2, '0')}:${String(finalMinutes).padStart(2, '0')}`;
+          console.log(`     ✓ SHIFT MATCHED:`);
+          console.log(`       Shift Name: ${shift.shift_name}`);
+          console.log(`       Start Time: ${shift.start_time} + ${graceMinutes}min grace = ${startTimeStr}`);
+          console.log(`\n  ══════════════════════════════════════════════════════════════`);
+          console.log(`  FINAL RESULT:`);
+          console.log(`    Employee: ${empCode}`);
+          console.log(`    Date: ${dateStr}`);
+          console.log(`    Shift Start Time: ${startTimeStr}`);
+          console.log(`    Policy: ${policy.shift_policy_rule}`);
+          console.log(`    Matched Shift: ${shift.shift_name}`);
+          console.log(`    Grace Period: ${graceMinutes} minutes`);
+          console.log(`\n  ══════════════════════════════════════════════════════════════`);
+          return startTimeStr;
+        } else {
+          console.log(`     ✗ Could not match shift from policy: ${policy.shift_policy_rule}`);
+          // 5. Fallback: Parse time from policy text
+          const parsed = this.parseShiftTimeFromPolicy(policy.shift_policy_rule);
+          if (parsed) {
+            const graceMinutes = 45; // Default grace
+            const [startHour, startMin] = parsed.startTime.split(':').map(Number);
+            const startMinutes = startHour * 60 + startMin;
+            const totalMinutes = startMinutes + graceMinutes;
+            const finalHours = Math.floor(totalMinutes / 60) % 24;
+            const finalMinutes = totalMinutes % 60;
+            const startTimeStr = `${String(finalHours).padStart(2, '0')}:${String(finalMinutes).padStart(2, '0')}`;
+            console.log(`[Shift] ${empCode} on ${dateStr}: Parsed from text - ${parsed.shiftName} (${parsed.startTime} + ${graceMinutes}min grace) = ${startTimeStr}`);
+            return startTimeStr;
+          }
+        }
+      } else {
+        console.log(`[Shift] No policy found for ${empCode} (tried: ${variations.join(', ')}) on ${dateStr}`);
+        
+        // 6. Ultimate fallback - General shift 10:00 + 45 min grace = 10:45
+        console.log(`[Shift] ${empCode} on ${dateStr}: No shift assigned, using default 10:45 (General shift)`);
+        return '10:45';
+      }
+      
+      // 6. Ultimate fallback - General shift 10:00 + 45 min grace = 10:45
+      console.log(`[Shift] ${empCode} on ${dateStr}: No shift assigned, using default 10:45 (General shift)`);
+      return '10:45';
+
+    } catch (error) {
+      console.error(`[Shift] Error getting shift start time for ${empCode}:`, error);
+      // Fallback to default on error - General shift 10:00 + 45 min grace = 10:45
+      return '10:45';
+    }
+  }
+
+  /**
+   * Check if employee has duty roster policy enabled
+   * Returns the roster policy rule if set, null otherwise
+   */
+  async getEmployeeRosterPolicy(empCode: string): Promise<string | null> {
+    try {
+      const [policy] = await this.db.execute(
+        `SELECT duty_roster_policy_rule 
+         FROM employee_policy_tagging 
+         WHERE emp_code = ? 
+           AND duty_roster_policy_rule IS NOT NULL
+           AND duty_roster_policy_rule != ''
+           AND duty_roster_policy_rule != 'NO_ROSTER'
+         ORDER BY duty_roster_policy_date DESC
+         LIMIT 1`,
+        [empCode]
+      );
+      
+      const policies = policy as any[];
+      if (policies.length > 0) {
+        return policies[0].duty_roster_policy_rule;
+      }
+      return null;
+    } catch (error) {
+      console.error(`[Roster] Error checking roster policy for ${empCode}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get shift details by code
+   */
+  private async getShiftByCode(shiftCode: string): Promise<any | null> {
+    try {
+      const [result] = await this.db.execute(
+        `SELECT * FROM shifts WHERE shift_code = ? AND is_active = TRUE`,
+        [shiftCode]
+      );
+      const shifts = result as any[];
+      return shifts.length > 0 ? shifts[0] : null;
+    } catch (error) {
+      console.error(`[Shift] Error getting shift ${shiftCode}:`, error);
+      return null;
+    }
   }
 
   private parsePunchTime(punchTime: any): Date {
@@ -484,41 +1060,95 @@ export class AttendanceService {
     return new Date();
   }
 
+  private parseClockTimeString(timeValue: string): { hour: number; minute: number } | null {
+    if (!timeValue) return null;
+    const raw = timeValue.toString().trim();
+    if (raw === '') return null;
+
+    const normalized = raw.replace(/\./g, '').replace(/\s+/g, ' ').toUpperCase();
+
+    // HH:MM or HH:MM:SS
+    let match = normalized.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (match) {
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+        return { hour, minute };
+      }
+    }
+
+    // 12-hour format with AM/PM
+    match = normalized.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/);
+    if (match) {
+      let hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const period = match[4];
+      if (hour === 12) {
+        hour = period === 'AM' ? 0 : 12;
+      } else if (period === 'PM') {
+        hour += 12;
+      }
+      if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+        return { hour, minute };
+      }
+    }
+
+    // 12-hour format without minutes
+    match = normalized.match(/^(\d{1,2})\s*(AM|PM)$/);
+    if (match) {
+      let hour = Number(match[1]);
+      const period = match[2];
+      if (hour === 12) {
+        hour = period === 'AM' ? 0 : 12;
+      } else if (period === 'PM') {
+        hour += 12;
+      }
+      if (hour >= 0 && hour < 24) {
+        return { hour, minute: 0 };
+      }
+    }
+
+    return null;
+  }
+
   private async loadFromRealtimeLogs(dto: SearchAttendanceDto): Promise<AttendanceDisplayRecord[]> {
     const searchTerms = dto.search ? dto.search.split(',').map(s => s.trim()).filter(s => s) : [];
     
     let query = `
       SELECT 
         rtl.*,
-        e.emp_code,
-        e.full_name_english,
-        e.department,
-        COALESCE(e.full_name_english, rtl.employee_name) as display_name,
-        COALESCE(e.emp_code, rtl.device_user_id) as display_emp_code
+        ce.\`AC-No.\` as ac_no,
+        ce.Department as department
       FROM real_time_logs rtl
-      LEFT JOIN employees e ON (e.emp_id = rtl.device_user_id OR e.punch_card = rtl.device_user_id)
+      LEFT JOIN csv_employees ce ON ce.\`AC-No.\` = rtl.\`AC-No.\`
       WHERE 1=1
     `;
     const params: any[] = [];
 
     if (searchTerms.length > 0) {
       query += ` AND (`;
-      query += searchTerms.map(() => 
-        `(e.full_name_english LIKE ? OR rtl.device_user_id = ? OR e.emp_code LIKE ?)`
-      ).join(' OR ');
+      query += searchTerms.map(() => {
+        if (dto.searchType === 'acc_no') return `rtl.\`AC-No.\` = ?`;
+        return `(rtl.\`AC-No.\` LIKE ? OR rtl.\`Name\` LIKE ?)`;
+      }).join(' OR ');
       query += `)`;
       
       for (const term of searchTerms) {
-        params.push(`%${term}%`, term, `%${term}%`);
+        if (dto.searchType === 'acc_no') {
+          params.push(term);
+        } else {
+          params.push(`%${term}%`, `%${term}%`);
+        }
       }
     }
 
-    if (dto.fromDate && dto.toDate) {
-      query += ` AND DATE(rtl.punch_time) >= ? AND DATE(rtl.punch_time) <= ?`;
-      params.push(dto.fromDate, dto.toDate);
-    }
+    // Remove date filtering since punch_time column doesn't exist
+    // if (dto.fromDate && dto.toDate) {
+    //   query += ` AND DATE(rtl.punch_time) >= ? AND DATE(rtl.punch_time) <= ?`;
+    //   params.push(dto.fromDate, dto.toDate);
+    // }
 
-    query += ` ORDER BY rtl.punch_time DESC`;
+    query += ` ORDER BY rtl.id DESC`;
 
     const [rows] = await this.db.execute(query, params);
     const logs = rows as any[];
@@ -528,20 +1158,19 @@ export class AttendanceService {
     
     for (const log of logs) {
       if (!log) continue;
-      const empCode = log.display_emp_code || log.device_user_id;
+      const empCode = log['No.'] || log['AC-No.'];
       
-      // Parse date safely using the helper method
-      const punchDate = this.parsePunchTime(log.punch_time);
-      const date = punchDate.toISOString().split('T')[0];
+      // Since there's no punch_time column, use current date
+      const date = new Date().toISOString().split('T')[0];
       
       const key = `${empCode}_${date}`;
       
       if (!dailyMap[key]) {
         dailyMap[key] = {
-          empNo: log.emp_code || '',
-          acNo: log.device_user_id,
-          no: log.display_emp_code || log.device_user_id,
-          name: log.display_name || 'Unknown',
+          empNo: log['Emp No.'] || '',
+          acNo: log['AC-No.'],
+          no: log['No.'] || log['AC-No.'],
+          name: log['Name'] || 'Unknown',
           date: date,
           punches: [],
           department: log.department || '',
@@ -553,20 +1182,20 @@ export class AttendanceService {
 
     // Convert to display records
     return Object.values(dailyMap).map((day: any) => {
+      // Sort by ID since there's no punch_time column
       day.punches.sort((a: any, b: any) => {
-        const timeA = this.parsePunchTime(a.punch_time).getTime() || 0;
-        const timeB = this.parsePunchTime(b.punch_time).getTime() || 0;
-        return timeA - timeB;
+        return (a.id || 0) - (b.id || 0);
       });
       
       const firstPunch = day.punches[0];
       const lastPunch = day.punches[day.punches.length - 1];
       
-      const inTime = this.formatTime(firstPunch.punch_time);
-      const outTime = day.punches.length > 1 ? this.formatTime(lastPunch.punch_time) : '';
+      // Since there's no punch_time, use placeholder times
+      const inTime = '--:--';
+      const outTime = '--:--';
       
-      const lateMinutes = this.calculateLateMinutes(firstPunch.punch_time, '09:00');
-      const late = lateMinutes > 0 ? this.minutesToTimeString(lateMinutes) : '';
+      // Set late to empty since we can't calculate without punch_time
+      const late = '';
       
       return {
         status: 'Present' as const,
@@ -583,76 +1212,51 @@ export class AttendanceService {
     });
   }
 
-  private async loadFromAttendanceTable(dto: SearchAttendanceDto): Promise<string[][]> {
-    // First get data from attendance table (punch machine data)
-    let attendanceQuery = `
-      SELECT 
-        'Present' as status,
-        a.emp_id,
-        '' as ac_no,
-        a.emp_id as emp_no,
-        COALESCE(e.full_name_english, a.emp_id) as name,
-        '' as auto_assign,
-        CONCAT(a.year, '-', LPAD(a.month, 2, '0'), '-', LPAD(a.day, 2, '0')) as date,
-        '' as timetable,
-        '09:00' as on_duty,
-        '18:00' as off_duty,
-        a.in_time as clock_in,
-        a.out_time as clock_out,
-        '' as normal,
-        '' as real_time,
-        CASE WHEN TIME(a.in_time) > '09:00' THEN 
-          TIME_FORMAT(SEC_TO_TIME(TIME_TO_SEC(a.in_time) - TIME_TO_SEC('09:00')), '%H:%i')
-        ELSE '' END as late,
-        '' as early,
-        '' as absent,
-        a.ot as ot_time,
-        '' as work_time,
-        '' as exception,
-        '' as must_cin,
-        '' as must_cout,
-        COALESCE(e.department, '') as department,
-        '' as ndays,
-        '' as weekend,
-        '' as holiday,
-        '' as att_time,
-        '' as ndays_ot,
-        '' as weekend_ot,
-        '' as holiday_ot
-      FROM attendance a
-      LEFT JOIN employees e ON e.emp_code = a.emp_id
-      WHERE 1=1
-    `;
-    const attendanceParams: any[] = [];
+  private async loadFromLogsTable(dto: SearchAttendanceDto): Promise<string[][]> {
+    // For job cards and monthly views, use logs table with calculated data
+    const isJobCard = dto.view === 'job_card';
+    const isMonthly = dto.view === 'monthly';
 
-    if (dto.search) {
-      attendanceQuery += ` AND (e.full_name_english LIKE ? OR a.emp_id LIKE ?)`;
-      attendanceParams.push(`%${dto.search}%`, `%${dto.search}%`);
-    }
-
-    if (dto.fromDate && dto.toDate) {
-      attendanceQuery += ` AND CONCAT(a.year, '-', LPAD(a.month, 2, '0'), '-', LPAD(a.day, 2, '0')) BETWEEN ? AND ?`;
-      attendanceParams.push(dto.fromDate, dto.toDate);
-    }
-
-    // Get data from logs table (CSV imported data)
+    // Query logs table with calculated fields (now includes all attendance data)
+    // This includes late, actual_late, policies, gross_salary, shift info
+    // Join with csv_employees to get all 4 identity fields
     let logsQuery = `
-      SELECT 
-        l.Status as status,
-        l.\`Emp No.\` as emp_id,
+      SELECT
+        COALESCE(l.\`Status\`, 'Present') as status,
+        l.emp_id,
         l.\`AC-No.\` as ac_no,
-        l.\`No.\` as emp_no,
-        l.\`Name\` as name,
+        -- Get all 4 identity fields from csv_employees (source of truth)
+        COALESCE(ce.\`Emp No.\`, l.\`Emp No.\`, '') as emp_no,
+        COALESCE(ce.\`No.\`, l.\`No.\`, l.emp_id, '') as no,
+        COALESCE(ce.\`Name\`, l.\`Name\`, '') as name,
         COALESCE(l.\`Auto-Assign\`, '') as auto_assign,
-        l.\`Date\` as date,
+        -- Use attendance_date if available, otherwise convert from Date
+        COALESCE(l.attendance_date,
+          CASE
+            WHEN l.\`Date\` LIKE '%/%/%'
+            THEN STR_TO_DATE(l.\`Date\`, '%m/%d/%Y')
+            ELSE l.\`Date\`
+          END
+        ) as date,
         COALESCE(l.\`Timetable\`, '') as timetable,
-        COALESCE(l.\`On duty\`, '09:00') as on_duty,
-        COALESCE(l.\`Off duty\`, '18:00') as off_duty,
+        COALESCE(l.shift_start_time,
+          CASE
+            WHEN UPPER(l.shift_code) LIKE '%MORNING%' THEN '08:00:00'
+            WHEN UPPER(l.shift_code) LIKE '%EVENING%' THEN '15:00:00'
+            WHEN UPPER(l.shift_code) LIKE '%NIGHT%' THEN '23:00:00'
+            WHEN UPPER(l.shift_code) LIKE '%GENERAL%' THEN '10:00:00'
+            WHEN UPPER(l.shift_code) LIKE '%RAMADAN%' THEN '09:00:00'
+            ELSE COALESCE(l.\`On duty\`, '09:00')
+          END
+        ) as on_duty,
+        COALESCE(s.end_time, l.\`Off duty\`, '18:00') as off_duty,
         l.\`Clock In\` as clock_in,
         l.\`Clock Out\` as clock_out,
         COALESCE(l.\`Normal\`, '') as normal,
         COALESCE(l.\`Real time\`, '') as real_time,
-        COALESCE(l.\`Late\`, '') as late,
+        -- Use stored calculated values from logs table
+        COALESCE(l.calculated_late, l.\`Late\`, '') as late,
+        COALESCE(l.late_minutes, 0) as late_minutes,
         COALESCE(l.\`Early\`, '') as early,
         COALESCE(l.\`Absent\`, '') as absent,
         COALESCE(l.\`OT Time\`, '') as ot_time,
@@ -660,27 +1264,74 @@ export class AttendanceService {
         COALESCE(l.\`Exception\`, '') as exception,
         COALESCE(l.\`Must C/In\`, '') as must_cin,
         COALESCE(l.\`Must C/Out\`, '') as must_cout,
-        COALESCE(l.\`Department\`, '') as department,
+        COALESCE(l.\`Department\`, ce.Department, '') as department,
         COALESCE(l.\`NDays\`, '') as ndays,
         COALESCE(l.\`WeekEnd\`, '') as weekend,
         COALESCE(l.\`Holiday\`, '') as holiday,
         COALESCE(l.\`ATT_Time\`, '') as att_time,
         COALESCE(l.\`NDays_OT\`, '') as ndays_ot,
         COALESCE(l.\`WeekEnd_OT\`, '') as weekend_ot,
-        COALESCE(l.\`Holiday_OT\`, '') as holiday_ot
+        COALESCE(l.\`Holiday_OT\`, '') as holiday_ot,
+        -- Policy and calculated fields for job cards/salary sheet
+        COALESCE(l.late_deduction_policy, '') as late_deduction_policy,
+        COALESCE(l.absent_deduction_policy, '') as absent_deduction_policy,
+        COALESCE(l.gross_salary, 0) as gross_salary,
+        COALESCE(l.shift_code, '') as shift_code,
+        COALESCE(l.shift_grace_minutes, 15) as shift_grace_minutes,
+        COALESCE(l.actual_absent, 0) as actual_absent,
+        COALESCE(l.late_count, 0) as late_count,
+        COALESCE(l.late_deduction_days, 0) as late_deduction_days,
+        COALESCE(l.absent_deduction_amount, 0) as absent_deduction_amount,
+        -- Get current policy from employee_policy_tagging (real-time, no sync needed)
+        COALESCE(ept.shift_policy_rule, 'General shift (10 AM - 6 PM)') as current_shift_policy,
+        COALESCE(ept.late_deduction_policy_rule, 'N/A') as current_late_policy,
+        COALESCE(ept.absent_deduction_policy_rule, 'N/A') as current_absent_policy
       FROM logs l
+      -- Join with csv_employees to get all 4 identity fields
+      LEFT JOIN csv_employees ce ON ce.\`AC-No.\` = l.\`AC-No.\`
+      -- Join shifts by shift_code
+      LEFT JOIN shifts s ON s.shift_code = l.shift_code AND s.is_active = TRUE
+      -- Join employee_policy_tagging to get CURRENT policy (real-time)
+      LEFT JOIN employee_policy_tagging ept ON ept.\`AC-No.\` = l.\`AC-No.\`
       WHERE 1=1
     `;
-    const logsParams: any[] = [];
+    let logsParams: any[] = [];
 
+    // Handle search by different types
     if (dto.search) {
-      logsQuery += ` AND (l.\`Name\` LIKE ? OR l.\`No.\` LIKE ? OR l.\`Emp No.\` LIKE ?)`;
-      logsParams.push(`%${dto.search}%`, `%${dto.search}%`, `%${dto.search}%`);
+      const searchTerm = `%${dto.search}%`;
+      switch (dto.searchType) {
+        case 'acc_no':
+          // Exact match for AC-No.
+          logsQuery += ` AND l.\`AC-No.\` = ?`;
+          logsParams.push(dto.search);
+          break;
+        case 'name':
+        default:
+          // Search by Name (from csv_employees or logs)
+          logsQuery += ` AND (ce.\`Name\` LIKE ? OR l.\`Name\` LIKE ?)`;
+          logsParams.push(searchTerm, searchTerm);
+          break;
+      }
     }
 
-    // Execute both queries and combine results
-    const [attendanceRows] = await this.db.execute(attendanceQuery, attendanceParams);
-    const [logsRows] = await this.db.execute(logsQuery, logsParams);
+    if (dto.fromDate && dto.toDate) {
+      logsQuery += ` AND COALESCE(l.attendance_date, STR_TO_DATE(l.\`Date\`, '%m/%d/%Y')) BETWEEN ? AND ?`;
+      logsParams.push(dto.fromDate, dto.toDate);
+    }
+
+    // Execute the query
+    const [logsResult] = await this.db.execute(logsQuery, logsParams);
+    const logsRows = logsResult as any[];
+
+    const logsRowsWithCurrentPolicy = await Promise.all(logsRows.map(async (row: any) => {
+      if (row.current_shift_policy && row.clock_in) {
+        const lateCalc = await this.recalculateLateForJobCard(row.clock_in, row.current_shift_policy);
+        row.late = lateCalc.late || row.late;
+        row.late_minutes = lateCalc.lateMinutes || row.late_minutes;
+      }
+      return row;
+    }));
 
     // Helper to convert date from M/D/YYYY to YYYY-MM-DD
     const convertDate = (dateStr: string): string => {
@@ -699,16 +1350,22 @@ export class AttendanceService {
     };
 
     const formatRow = (row: any, convertDates = false) => [
-      row.status, row.emp_id, row.ac_no, row.emp_no, row.name, row.auto_assign,
+      row.status,
+      row.emp_no || '',                     // empNo (index 1)
+      row.ac_no || '',                     // acNo (index 2)
+      row.no || '',                        // no (index 3)
+      row.name || '',                      // name (index 4)
+      row.auto_assign,
       convertDates ? convertDate(row.date) : row.date,
       row.timetable, row.on_duty, row.off_duty, row.clock_in, row.clock_out,
       row.normal, row.real_time, row.late, row.early, row.absent, row.ot_time,
       row.work_time, row.exception, row.must_cin, row.must_cout, row.department,
-      row.ndays, row.weekend, row.holiday, row.att_time, row.ndays_ot, row.weekend_ot, row.holiday_ot
+      row.ndays, row.weekend, row.holiday, row.att_time, row.ndays_ot, row.weekend_ot, row.holiday_ot,
+      // New policy columns from real-time join with employee_policy_tagging
+      row.current_shift_policy, row.current_late_policy, row.current_absent_policy
     ];
 
-    const attendanceRecords = (attendanceRows as any[]).map(row => formatRow(row, false));
-    let logsRecords = (logsRows as any[]).map(row => formatRow(row, true));
+    let logsRecords = logsRows.map(row => formatRow(row, true));
 
     // Filter logs by date in JS if date range specified
     if (dto.fromDate && dto.toDate) {
@@ -718,17 +1375,8 @@ export class AttendanceService {
       });
     }
 
-    // Combine and remove duplicates (based on emp_no + date)
-    const seen = new Set<string>();
-    const combined: string[][] = [];
-
-    for (const record of [...attendanceRecords, ...logsRecords]) {
-      const key = `${record[3]}_${record[6]}`; // emp_no + date
-      if (!seen.has(key)) {
-        seen.add(key);
-        combined.push(record);
-      }
-    }
+    // All views now use logs table only (which has all calculated fields)
+    let combined: string[][] = logsRecords;
 
     // Sort by date desc, then emp_id
     combined.sort((a, b) => {
@@ -742,21 +1390,22 @@ export class AttendanceService {
   }
 
   // Reuse existing helper methods from old service
-  private groupByEmployee(records: string[][]): Record<string, { name: string; empCode: string; idCard: string; dept: string; records: string[][] }> {
+  private groupByEmployee(records: string[][]): Record<string, { empNo: string; acNo: string; no: string; name: string; dept: string; records: string[][] }> {
     const groups: Record<string, any> = {};
 
     for (const rec of records) {
-      const empId = rec[3]; // emp_no column
-      if (!groups[empId]) {
-        groups[empId] = {
-          name: rec[4] || '-', // name column
-          empCode: rec[3] || '-',
-          idCard: rec[2] || '-',
-          dept: rec[22] || '-',
+      const no = rec[3]; // `No.` column - used as key
+      if (!groups[no]) {
+        groups[no] = {
+          empNo: rec[1] || '-',  // `Emp No.` column
+          acNo: rec[2] || '-',   // `AC-No.` column
+          no: rec[3] || '-',     // `No.` column
+          name: rec[4] || '-',   // `Name` column
+          dept: rec[22] || '-',  // Department column
           records: [],
         };
       }
-      groups[empId].records.push(rec);
+      groups[no].records.push(rec);
     }
 
     return groups;
@@ -781,6 +1430,9 @@ export class AttendanceService {
 
     let weekend = 0, workingDays = 0, absent = 0, present = 0, late = 0, earlyOut = 0;
 
+    console.log(`[JobCardSummary] Processing ${records.length} records from ${calcFrom} to ${calcTo}`);
+    let lateDebugCount = 0;
+
     const current = new Date(start);
     while (current <= end) {
       const dateKey = current.toISOString().split('T')[0];
@@ -790,6 +1442,8 @@ export class AttendanceService {
       if (dateIndex[dateKey]) {
         const rec = dateIndex[dateKey];
         const isPresent = rec[0] === 'Present';
+        const empCode = rec[3];
+        const lateValue = rec[14]; // calculated_late (policy-based) at index 14
 
         if (isFriday) {
           weekend++;
@@ -798,7 +1452,17 @@ export class AttendanceService {
           workingDays++;
           if (isPresent) {
             present++;
-            if (rec[14] && rec[14] !== '00:00') late++;
+            // Count late if rec[14] (calculated_late column) has a value and it's not empty/zero
+            if (lateValue && lateValue.trim() !== '' && lateValue !== '00:00' && lateValue !== '0:00') {
+              late++;
+              if (lateDebugCount < 10) {
+                console.log(`[JobCardSummary] ${empCode} on ${dateKey}: calculatedLate="${lateValue}" -> LATE. Present=${present}, Late=${late}`);
+                lateDebugCount++;
+              }
+            } else if (lateDebugCount < 10) {
+              console.log(`[JobCardSummary] ${empCode} on ${dateKey}: calculatedLate="${lateValue}" -> ON TIME. Present=${present}`);
+              lateDebugCount++;
+            }
           } else {
             absent++;
           }
@@ -812,6 +1476,8 @@ export class AttendanceService {
 
       current.setDate(current.getDate() + 1);
     }
+
+    console.log(`[JobCardSummary] Final summary: Present=${present}, Late=${late}, Absent=${absent}, WorkingDays=${workingDays}`);
 
     return {
       totalDays,
@@ -919,7 +1585,9 @@ export class AttendanceService {
 
       const day = parseInt(dateStr.split('-')[2]);
       const status = rec[0]?.trim();
-      const isLate = rec[14] && rec[14] !== '00:00';
+      // Check for late - use calculated_late (policy-based) at index 14
+      const lateValue = rec[14]; // calculated_late column (policy-based)
+      const isLate = lateValue && lateValue.trim() !== '' && lateValue !== '00:00' && lateValue !== '0:00';
 
       // Determine status: Present -> 'P', Absent -> 'A', otherwise '-' (no data)
       let dayStatus = '-';
@@ -942,9 +1610,14 @@ export class AttendanceService {
   private calculateMonthlyTotals(daysData: any[]): { present: number; absent: number; late: number } {
     let present = 0, absent = 0, late = 0;
     for (const dd of daysData) {
-      if (dd.status === 'P') present++;
+      if (dd.status === 'P') {
+        present++;
+        // Only count late if present and has late flag
+        if (dd.late && dd.late !== '' && dd.late !== '0' && dd.late !== '00:00') {
+          late++;
+        }
+      }
       if (dd.status === 'A') absent++;
-      if (dd.late === '1') late++;
     }
     return { present, absent, late };
   }
@@ -971,30 +1644,146 @@ export class AttendanceService {
   }
 
   /**
-   * Get all users/employees from database
+   * Recalculate calculated_late for all logs records of an employee
+   * This updates the database with new late values based on CURRENT shift_policy_rule
+   * Call this when shift_policy_rule changes in employee_policy_tagging
    */
-  async getAllUsers(): Promise<any[]> {
+  async recalculateAllLateForEmployee(empCode: string): Promise<{ 
+    success: boolean; 
+    message: string; 
+    updated: number;
+    details: Array<{ date: string; oldLate: string; newLate: string; clockIn: string }>;
+  }> {
     try {
-      const [rows] = await this.db.execute(
-        `SELECT id, emp_id, emp_code, full_name_english, full_name_bangla, 
-                department, designation, status, created_at
-         FROM employees 
-         ORDER BY full_name_english ASC`
+      // 1. Get current policy for this employee
+      const [policyRows] = await this.db.execute(
+        `SELECT shift_policy_rule, late_deduction_policy_rule, absent_deduction_policy_rule 
+         FROM employee_policy_tagging 
+         WHERE \`No.\` = ? OR \`AC-No.\` = ? OR \`Emp No.\` = ?
+         ORDER BY id DESC LIMIT 1`,
+        [empCode, empCode, empCode]
       );
-      return rows as any[];
+      
+      if ((policyRows as any[]).length === 0) {
+        return {
+          success: false,
+          message: `No policy found for employee ${empCode}`,
+          updated: 0,
+          details: []
+        };
+      }
+      
+      const policy = (policyRows as any[])[0];
+      const shiftPolicyRule = policy.shift_policy_rule || 'General shift (10 AM - 6 PM)';
+      
+      // 2. Get shift details
+      const shift = await this.getShiftFromPolicyRule(shiftPolicyRule);
+      if (!shift) {
+        return {
+          success: false,
+          message: `No shift found for policy: ${shiftPolicyRule}`,
+          updated: 0,
+          details: []
+        };
+      }
+      
+      // 3. Get all logs records for this employee with clock-in
+      const [logsRows] = await this.db.execute(
+        `SELECT id, \`Date\`, \`Clock In\`, calculated_late, \`No.\`, \`AC-No.\`, \`Emp No.\`, \`Name\`
+         FROM logs 
+         WHERE (\`No.\` = ? OR \`AC-No.\` = ? OR \`Emp No.\` = ? OR emp_id = ?)
+           AND \`Clock In\` IS NOT NULL 
+           AND \`Clock In\` != ''
+         ORDER BY \`Date\``,
+        [empCode, empCode, empCode, empCode]
+      );
+      
+      const logs = logsRows as any[];
+      let updatedCount = 0;
+      const details: Array<{ date: string; oldLate: string; newLate: string; clockIn: string }> = [];
+      
+      // 4. Calculate threshold (shift start + grace)
+      const [shiftHour, shiftMin] = shift.start_time.split(':').map(Number);
+      const thresholdMinutes = shiftHour * 60 + shiftMin + shift.grace_period_minutes;
+      
+      // 5. For each record, recalculate late
+      for (const log of logs) {
+        const clockIn = log['Clock In'];
+        const oldLate = log.calculated_late || '';
+        
+        if (!clockIn) continue;
+        
+        const clockTime = this.parseClockTimeString(clockIn.toString());
+        if (!clockTime) continue;
+        
+        const clockMinutes = clockTime.hour * 60 + clockTime.minute;
+        
+        // Calculate late
+        const lateMinutes = Math.max(0, clockMinutes - thresholdMinutes);
+        
+        let newLate = '';
+        if (lateMinutes > 0) {
+          const hours = Math.floor(lateMinutes / 60);
+          const mins = lateMinutes % 60;
+          newLate = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+        }
+        
+        // Only update if changed
+        if (newLate !== oldLate) {
+          await this.db.execute(
+            `UPDATE logs 
+             SET calculated_late = ?, 
+                 late_minutes = ?, 
+                 calculated_late_minutes = ?,
+                 shift_policy_rule = ?,
+                 shift_code = ?,
+                 shift_start_time = ?,
+                 shift_grace_minutes = ?
+             WHERE id = ?`,
+            [
+              newLate,
+              lateMinutes,
+              lateMinutes,
+              shiftPolicyRule,
+              shift.shift_code,
+              shift.start_time,
+              shift.grace_period_minutes,
+              log.id
+            ]
+          );
+          
+          updatedCount++;
+          details.push({
+            date: log['Date'],
+            oldLate: oldLate || '-',
+            newLate: newLate || '-',
+            clockIn: clockIn
+          });
+        }
+      }
+      
+      console.log(`[Recalculate Late] Employee ${empCode}: Updated ${updatedCount} records based on ${shiftPolicyRule}`);
+      
+      return {
+        success: true,
+        message: `Updated ${updatedCount} records for employee ${empCode} using ${shiftPolicyRule}`,
+        updated: updatedCount,
+        details
+      };
+      
     } catch (error: any) {
-      console.error('Error getting users:', error.message);
-      throw new Error('Failed to get users from database');
+      console.error('Error recalculating late:', error.message);
+      throw new Error('Failed to recalculate late');
     }
   }
 
   /**
-   * Clear all attendance data from logs, real_time_logs, and attendance tables
+   * Clear all attendance data from logs and real_time_logs tables
    * This is used when user wants to reset and upload new CSV data
    */
-  async clearAllData(): Promise<{ success: boolean; message: string; deleted: { logs: number; realTimeLogs: number; attendance: number } }> {
+  async clearAllData(): Promise<{ success: boolean; message: string; deleted: { logs: number; realTimeLogs: number } }> {
     try {
-      // Delete from logs table (CSV imported data)
+      // Delete from logs table (CSV imported data with calculated fields)
       const [logsResult] = await this.db.execute('DELETE FROM logs');
       const logsDeleted = (logsResult as any).affectedRows || 0;
 
@@ -1002,11 +1791,7 @@ export class AttendanceService {
       const [rtlResult] = await this.db.execute('DELETE FROM real_time_logs');
       const rtlDeleted = (rtlResult as any).affectedRows || 0;
 
-      // Delete from attendance table (aggregated daily data)
-      const [attResult] = await this.db.execute('DELETE FROM attendance');
-      const attDeleted = (attResult as any).affectedRows || 0;
-
-      console.log(`[Clear Data] Deleted: ${logsDeleted} logs, ${rtlDeleted} real-time logs, ${attDeleted} attendance records`);
+      console.log(`[Clear Data] Deleted: ${logsDeleted} logs, ${rtlDeleted} real-time logs`);
 
       return {
         success: true,
@@ -1014,12 +1799,78 @@ export class AttendanceService {
         deleted: {
           logs: logsDeleted,
           realTimeLogs: rtlDeleted,
-          attendance: attDeleted,
         },
       };
     } catch (error: any) {
       console.error('Error clearing data:', error.message);
       throw new Error('Failed to clear attendance data');
+    }
+  }
+
+  /**
+   * Sync shift_policy_rule from employee_policy_tagging to logs table
+   * This updates all logs records to match the current policy
+   */
+  async syncPolicyToLogs(empCode?: string): Promise<{ success: boolean; message: string; updated: number }> {
+    try {
+      let updatedCount = 0;
+
+      if (empCode) {
+        // Sync specific employee
+        const [policyRows] = await this.db.execute(
+          `SELECT \`AC-No.\`, \`No.\`, \`Emp No.\`, shift_policy_rule 
+           FROM employee_policy_tagging 
+           WHERE \`No.\` = ? OR \`AC-No.\` = ? OR \`Emp No.\` = ?
+           ORDER BY id DESC LIMIT 1`,
+          [empCode, empCode, empCode]
+        );
+        const policies = policyRows as any[];
+
+        if (policies.length > 0 && policies[0].shift_policy_rule) {
+          const policy = policies[0];
+          const [updateResult] = await this.db.execute(
+            `UPDATE logs 
+             SET shift_policy_rule = ?
+             WHERE (\`AC-No.\` = ? OR \`No.\` = ? OR \`Emp No.\` = ?)`,
+            [policy.shift_policy_rule, policy['AC-No.'], policy['No.'], policy['Emp No.']]
+          );
+          updatedCount = (updateResult as any).affectedRows || 0;
+        }
+
+        return {
+          success: true,
+          message: `Synced policy for employee ${empCode}`,
+          updated: updatedCount,
+        };
+      } else {
+        // Sync all employees - get all policies and update logs
+        const [allPolicies] = await this.db.execute(
+          `SELECT \`AC-No.\`, \`No.\`, \`Emp No.\`, shift_policy_rule 
+           FROM employee_policy_tagging 
+           WHERE shift_policy_rule IS NOT NULL AND shift_policy_rule != ''`
+        );
+        const policies = allPolicies as any[];
+
+        for (const policy of policies) {
+          const [updateResult] = await this.db.execute(
+            `UPDATE logs 
+             SET shift_policy_rule = ?
+             WHERE (\`AC-No.\` = ? OR \`No.\` = ? OR \`Emp No.\` = ?)
+               AND (shift_policy_rule IS NULL OR shift_policy_rule != ?)`,
+            [policy.shift_policy_rule, policy['AC-No.'], policy['No.'], policy['Emp No.'], policy.shift_policy_rule]
+          );
+          updatedCount += (updateResult as any).affectedRows || 0;
+        }
+
+        return {
+          success: true,
+          message: `Synced policies for ${policies.length} employees`,
+          updated: updatedCount,
+        };
+      }
+    } catch (error: any) {
+      console.error('Error syncing policy to logs:', error.message);
+      throw new Error('Failed to sync policy to logs');
     }
   }
 
@@ -1039,10 +1890,11 @@ export class AttendanceService {
       let headers: string[] = [];
       
       fs.createReadStream(filePath)
-        .pipe(csv({ 
+        .pipe(csvParser({ 
           mapHeaders: ({ header }) => {
-            headers.push(header);
-            return header;
+            const trimmedHeader = header.trim();
+            headers.push(trimmedHeader);
+            return trimmedHeader;
           }
         }))
         .on('data', (data) => {
@@ -1054,8 +1906,24 @@ export class AttendanceService {
             fs.unlinkSync(filePath);
             
             // Validate required columns exist (Status is NOT required - derived from Clock In)
-            const requiredColumns = ['Emp No.', 'AC-No.', 'No.', 'Name', 'Date', 'Clock In', 'Clock Out'];
-            const missingColumns = requiredColumns.filter(col => !headers.includes(col));
+            // Support multiple variations of column names
+            const requiredColumnMappings = [
+              { names: ['Emp No.', 'Emp No', 'Emp_No.', 'Emp_No', 'EMP NO.', 'EMPNO'], required: true },
+              { names: ['AC-No.', 'AC-No', 'AC_No.', 'AC_No', 'AC-NO.', 'ACNO', 'AC No.'], required: true },
+              { names: ['No.', 'No', 'NO.', 'NO', 'Num'], required: true },
+              { names: ['Name', 'NAME', 'name'], required: true },
+              { names: ['Date', 'date', 'DATE'], required: true },
+              { names: ['Clock In', 'ClockIn', 'CLOCK IN', 'Clock_In', 'In'], required: true },
+              { names: ['Clock Out', 'ClockOut', 'CLOCK OUT', 'Clock_Out', 'Out'], required: true }
+            ];
+            
+            const missingColumns: string[] = [];
+            for (const mapping of requiredColumnMappings) {
+              const hasColumn = mapping.names.some(name => headers.includes(name));
+              if (!hasColumn && mapping.required) {
+                missingColumns.push(mapping.names[0]); // Use first name as representative
+              }
+            }
             
             if (missingColumns.length > 0) {
               throw new Error(`Missing required columns: ${missingColumns.join(', ')}. Found columns: ${headers.join(', ')}`);
@@ -1157,15 +2025,16 @@ export class AttendanceService {
       
       console.log('[File Upload] Excel converted to CSV:', csvPath, 'Rows:', jsonData.length - 1);
       return csvPath;
-    } catch (error) {
-      console.error('[File Upload] Excel conversion error:', error.message);
-      throw new Error(`Failed to convert Excel file: ${error.message}`);
+    } catch (error: any) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[File Upload] Excel conversion error:', message);
+      throw new Error(`Failed to convert Excel file: ${message}`);
     }
   }
 
   /**
    * Import CSV records into logs and real_time_logs tables
-   * Uses exact column names from CSV header
+   * Redesigned for high reliability and strict matching
    */
   private async importCsvRecords(records: any[], headers: string[]): Promise<{
     recordsProcessed: number;
@@ -1173,214 +2042,192 @@ export class AttendanceService {
     punchesCreated: number;
     dateRange: { from: string; to: string };
   }> {
-    let logsInserted = 0;
-    let punchesCreated = 0;
-    let skippedRecords = 0;
+    const startTime = Date.now();
+    const summary = {
+      total: records.length,
+      success: 0,
+      skipped: 0,
+      reasons: { noDate: 0, invalidDate: 0, employeeNotFound: 0, dbError: 0 }
+    };
+
     let minDate: Date | null = null;
     let maxDate: Date | null = null;
 
-    console.log('[CSV Import] Starting import of', records.length, 'records');
+    if (records.length === 0) {
+      return { recordsProcessed: 0, logsInserted: 0, punchesCreated: 0, dateRange: { from: '', to: '' } };
+    }
 
-    // Process in batches to avoid overwhelming the database
+    // 1. Initialize Column Mapper
+    const mapper = new CsvColumnMapper(headers);
+    console.log('[CSV Import] Headers Normalized. Ready to process', records.length, 'records.');
+
+    // 2. Pre-populate csv_employees with unique employees from this CSV
+    await this.syncCsvEmployeesFromRecords(records, mapper);
+
+    // 3. Process in optimized batches
     const batchSize = 100;
-    
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
-      
-      for (const record of batch) {
+
+      for (const [idx, rawRecord] of batch.entries()) {
+        const rowNum = i + idx + 1;
+        let empCodeForLog = 'unknown';
+        let dateFormattedForLog = 'unknown';
+
         try {
-          // Parse the date from CSV (format: M/D/YYYY or MM/DD/YYYY)
-          const dateStr = record['Date'];
-          if (!dateStr) {
-            skippedRecords++;
-            continue;
-          }
+          // Extract and normalize values
+          const row = {
+            date: mapper.getValue(rawRecord, 'date'),
+            empNo: mapper.getValue(rawRecord, 'empNo'),
+            acNo: mapper.getValue(rawRecord, 'acNo'),
+            no: mapper.getValue(rawRecord, 'no'),
+            name: mapper.getValue(rawRecord, 'name'),
+            department: mapper.getValue(rawRecord, 'department'),
+            clockIn: mapper.getValue(rawRecord, 'clockIn'),
+            clockOut: mapper.getValue(rawRecord, 'clockOut'),
+            status: mapper.getValue(rawRecord, 'status'),
+            absent: mapper.getValue(rawRecord, 'absent')
+          };
 
-          const parsedDate = this.parseCsvDate(dateStr);
+          // A. Date Validation
+          if (!row.date) {
+            summary.skipped++; summary.reasons.noDate++; continue;
+          }
+          const parsedDate = this.parseCsvDate(row.date);
           if (!parsedDate) {
-            console.log('[CSV Import] Invalid date:', dateStr);
-            skippedRecords++;
-            continue;
+            summary.skipped++; summary.reasons.invalidDate++; continue;
           }
-
+          
           // Track date range
           if (!minDate || parsedDate < minDate) minDate = parsedDate;
           if (!maxDate || parsedDate > maxDate) maxDate = parsedDate;
+          dateFormattedForLog = parsedDate.toISOString().split('T')[0];
 
-          const dateFormatted = parsedDate.toISOString().split('T')[0];
-          
-          // Extract employee info using exact column names
-          const empNo = record['Emp No.'] || '';
-          const acNo = record['AC-No.'] || '';
-          const empCode = record['No.'] || '';
-          const name = record['Name'] || '';
-          const department = record['Department'] || '';
-          
-          // Clock times
-          const clockIn = record['Clock In'] || '';
-          const clockOut = record['Clock Out'] || '';
-          
-          // Derive status from Clock In - if Clock In has value, Present; otherwise Absent
-          // Only use Status column from CSV if it exists
-          let status = 'Present';
-          if (headers.includes('Status')) {
-            status = record['Status'] || 'Present';
-          } else {
-            // Derive from Clock In presence
-            status = clockIn && clockIn.trim() ? 'Present' : 'Absent';
+          // B. STRICT Employee Resolution (No guessing)
+          const employee = await this.resolveEmployeeStrict(row);
+          if (!employee) {
+            if (summary.reasons.employeeNotFound < 5) {
+              console.warn(`[CSV Skip] Row ${rowNum}: Employee match failed for AC-No.=${row.acNo}`);
+            }
+            summary.skipped++; summary.reasons.employeeNotFound++; continue;
           }
           
-          // Also check the Absent column if present
-          const isAbsentFlag = record['Absent'] === 'True' || record['Absent'] === 'true' || record['Absent'] === '1';
-          
-          // Skip if no meaningful data
-          if (!empNo && !acNo && !empCode) {
-            skippedRecords++;
-            continue;
-          }
-          
-          // Final status determination
+          // Extract all 4 identity columns from employee record
+          const empNo = employee['Emp No.'] || row.empNo || '';
+          const acNo = employee['AC-No.'] || row.acNo || '';
+          const no = employee['No.'] || row.no || '';
+          const name = employee['Name'] || row.name || '';
+          const department = employee['Department'] || row.department || '';
+          empCodeForLog = acNo;
+
+          // C. Calculate Status and Late
+          const isAbsentFlag = row.absent === 'True' || row.absent === 'true' || row.absent === '1';
+          let status = mapper.has('status') ? (row.status || 'Present') : (row.clockIn ? 'Present' : 'Absent');
           const finalStatus = isAbsentFlag ? 'Absent' : status;
+
+          const calculatedLate = await this.calculateLateForCsvImport(acNo, dateFormattedForLog, row.clockIn, '');
           
-          // 1. Insert into logs table (raw CSV data) - using all columns
-          // Note: Status is derived (not from CSV) if CSV doesn't have Status column
-          const statusValue = headers.includes('Status') ? (record['Status'] || finalStatus) : finalStatus;
-          
+          let lateMinutes = 0;
+          let actualLate = 0;
+          if (calculatedLate && calculatedLate !== '00:00') {
+            const timeParts = calculatedLate.split(':');
+            if (timeParts.length === 2) {
+              lateMinutes = parseInt(timeParts[0], 10) * 60 + parseInt(timeParts[1], 10);
+              actualLate = parseFloat((lateMinutes / 60).toFixed(2));
+            }
+          }
+          if (!isFinite(actualLate)) actualLate = 0;
+
+          // D. Get Policy and Salary
+          const [policyRows] = await this.db.execute(
+            `SELECT late_deduction_policy_rule, absent_deduction_policy_rule, shift_policy_rule
+             FROM employee_policy_tagging WHERE \`AC-No.\` = ? LIMIT 1`,
+            [acNo]
+          );
+          const policy = (policyRows as any[])[0] || {};
+
+          const [salaryRows] = await this.db.execute(
+            `SELECT gross_salary, basic_salary FROM employee_salary_information WHERE \`AC-No.\` = ? LIMIT 1`,
+            [acNo]
+          );
+          const salaryInfo = (salaryRows as any[])[0] || {};
+          const grossSalary = parseFloat(salaryInfo.gross_salary) || 0;
+          const basicSalary = parseFloat(salaryInfo.basic_salary) || 0;
+          const policyType = grossSalary > 0 ? 'gross' : 'not_applicable';
+
+          // E. Get Shift Info
+          let shiftCode = '', shiftStartTime = null, shiftGraceMinutes = 15;
+          if (policy.shift_policy_rule) {
+            const shift = await this.getShiftFromPolicyRule(policy.shift_policy_rule);
+            if (shift) {
+              shiftCode = shift.shift_code;
+              shiftStartTime = shift.start_time;
+              shiftGraceMinutes = shift.grace_period_minutes;
+            }
+          }
+
+          // F. Atomic UPSERT into Logs (all 4 identity columns stored)
           await this.db.execute(
             `INSERT INTO logs (
-              \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, \`Auto-Assign\`, \`Date\`, \`Timetable\`,
-              \`On duty\`, \`Off duty\`, \`Clock In\`, \`Clock Out\`, \`Normal\`, \`Real time\`,
-              \`Late\`, \`Early\`, \`Absent\`, \`OT Time\`, \`Work Time\`, \`Exception\`,
-              \`Must C/In\`, \`Must C/Out\`, \`Department\`, \`NDays\`, \`WeekEnd\`,
-              \`Holiday\`, \`ATT_Time\`, \`NDays_OT\`, \`WeekEnd_OT\`, \`Holiday_OT\`, \`Status\`
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, emp_id, \`Date\`, \`Clock In\`, \`Clock Out\`,
+              \`Late\`, calculated_late, \`Status\`, gross_salary, basic_salary, policy_type,
+              shift_code, shift_policy_rule, shift_start_time, shift_grace_minutes,
+              late_minutes, calculated_late_minutes, actual_late,
+              late_deduction_policy, absent_deduction_policy,
+              day, month, year, attendance_date, \`Auto-Assign\`, \`Timetable\`, \`On duty\`, \`Off duty\`,
+              \`Normal\`, \`Real time\`, \`Early\`, \`Absent\`, \`OT Time\`, \`Work Time\`, \`Exception\`,
+              \`Must C/In\`, \`Must C/Out\`, \`Department\`, \`NDays\`, \`WeekEnd\`, \`Holiday\`, \`ATT_Time\`,
+              \`NDays_OT\`, \`WeekEnd_OT\`, \`Holiday_OT\`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
-              \`Status\` = VALUES(\`Status\`),
-              \`Clock In\` = VALUES(\`Clock In\`),
-              \`Clock Out\` = VALUES(\`Clock Out\`),
-              \`Late\` = VALUES(\`Late\`),
-              \`Early\` = VALUES(\`Early\`),
-              \`Work Time\` = VALUES(\`Work Time\`),
-              \`OT Time\` = VALUES(\`OT Time\`)`,
+              \`Clock In\` = VALUES(\`Clock In\`), \`Clock Out\` = VALUES(\`Clock Out\`),
+              calculated_late = VALUES(calculated_late), \`Status\` = VALUES(\`Status\`),
+              actual_late = VALUES(actual_late)`,
             [
-              empNo,
-              acNo,
-              empCode,
-              name,
-              record['Auto-Assign'] || '',
-              dateStr,
-              record['Timetable'] || '',
-              record['On duty'] || '',
-              record['Off duty'] || '',
-              clockIn,
-              clockOut,
-              record['Normal'] || '',
-              record['Real time'] || '',
-              record['Late'] || '',
-              record['Early'] || '',
-              record['Absent'] || '',
-              record['OT Time'] || '',
-              record['Work Time'] || '',
-              record['Exception'] || '',
-              record['Must C/In'] || '',
-              record['Must C/Out'] || '',
-              department,
-              record['NDays'] || '',
-              record['WeekEnd'] || '',
-              record['Holiday'] || '',
-              record['ATT_Time'] || '',
-              record['NDays_OT'] || '',
-              record['WeekEnd_OT'] || '',
-              record['Holiday_OT'] || '',
-              statusValue
+              empNo, acNo, no, name, acNo, row.date, row.clockIn, row.clockOut,
+              rawRecord['Late'] || '', calculatedLate, finalStatus, grossSalary, basicSalary, policyType,
+              shiftCode, policy.shift_policy_rule || 'General shift (10 AM - 6 PM)', shiftStartTime, shiftGraceMinutes,
+              lateMinutes, lateMinutes, actualLate,
+              policy.late_deduction_policy_rule || '5_late_1_absent', policy.absent_deduction_policy_rule || 'N/A',
+              parsedDate.getDate(), parsedDate.getMonth() + 1, parsedDate.getFullYear(), dateFormattedForLog,
+              rawRecord['Auto-Assign'] || '', rawRecord['Timetable'] || '', rawRecord['On duty'] || '', rawRecord['Off duty'] || '',
+              rawRecord['Normal'] || '', rawRecord['Real time'] || '', rawRecord['Early'] || '', rawRecord['Absent'] || '',
+              rawRecord['OT Time'] || '', rawRecord['Work Time'] || '', rawRecord['Exception'] || '',
+              rawRecord['Must C/In'] || '', rawRecord['Must C/Out'] || '', department,
+              rawRecord['NDays'] || '', rawRecord['WeekEnd'] || '', rawRecord['Holiday'] || '', rawRecord['ATT_Time'] || '',
+              rawRecord['NDays_OT'] || '', rawRecord['WeekEnd_OT'] || '', rawRecord['Holiday_OT'] || ''
             ]
           );
-          logsInserted++;
 
-          // 2. Create real_time_logs entries for dashboard display
-          const deviceUserId = acNo || empNo || empCode;
-          
-          // Convert Clock In to punch_time
-          if (clockIn && clockIn.trim()) {
-            const punchDateTime = this.combineDateAndTime(dateFormatted, clockIn);
-            if (punchDateTime) {
-              // Check for duplicate
-              const [existing] = await this.db.execute(
-                `SELECT id FROM real_time_logs 
-                 WHERE device_user_id = ? AND punch_time = ?`,
-                [deviceUserId, punchDateTime]
-              );
-              
-              if (!(existing as any[]).length) {
-                await this.db.execute(
-                  `INSERT INTO real_time_logs 
-                   (device_user_id, emp_code, employee_name, punch_time, verify_type, status, device_ip) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    deviceUserId,
-                    empCode,
-                    name,
-                    punchDateTime,
-                    'CSV Import',
-                    'CheckIn',
-                    'CSV_UPLOAD'
-                  ]
-                );
-                punchesCreated++;
-              }
-            }
-          }
+          // G. Sync back to Master Employees (all 4 identity columns stored)
+          await this.db.execute(
+            `UPDATE employees 
+             SET \`Emp No.\` = ?, \`No.\` = ?, \`Name\` = ?, department = ?, updated_at = NOW() 
+             WHERE \`AC-No.\` = ?`,
+            [empNo, no, name, department, acNo]
+          );
 
-          // Convert Clock Out to punch_time (if different from Clock In)
-          if (clockOut && clockOut.trim() && clockOut !== clockIn) {
-            const punchDateTime = this.combineDateAndTime(dateFormatted, clockOut);
-            if (punchDateTime) {
-              // Check for duplicate
-              const [existing] = await this.db.execute(
-                `SELECT id FROM real_time_logs 
-                 WHERE device_user_id = ? AND punch_time = ?`,
-                [deviceUserId, punchDateTime]
-              );
-              
-              if (!(existing as any[]).length) {
-                await this.db.execute(
-                  `INSERT INTO real_time_logs 
-                   (device_user_id, emp_code, employee_name, punch_time, verify_type, status, device_ip) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    deviceUserId,
-                    empCode,
-                    name,
-                    punchDateTime,
-                    'CSV Import',
-                    'CheckOut',
-                    'CSV_UPLOAD'
-                  ]
-                );
-                punchesCreated++;
-              }
-            }
-          }
+          summary.success++;
 
-        } catch (err) {
-          console.error(`[CSV Import] Error processing record:`, record, err.message);
-          skippedRecords++;
-          // Continue with next record
+        } catch (err: any) {
+          const errorCode = err.code || 'UNKNOWN';
+          console.error(`[CSV Error] Row ${rowNum} (${empCodeForLog}): [${errorCode}] ${err.message}`);
+          summary.skipped++; summary.reasons.dbError++;
         }
       }
-      
-      // Log progress every 100 records
+
       if (i > 0 && i % 500 === 0) {
         console.log(`[CSV Import] Progress: ${i}/${records.length} records processed`);
       }
     }
 
-    console.log(`[CSV Import] Completed: ${logsInserted} logs, ${punchesCreated} punches, ${skippedRecords} skipped`);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`[CSV Import] COMPLETED. Success: ${summary.success}, Skipped: ${summary.skipped} (${duration}s)`);
     
     return {
       recordsProcessed: records.length,
-      logsInserted,
-      punchesCreated,
+      logsInserted: summary.success,
+      punchesCreated: 0,
       dateRange: {
         from: minDate ? minDate.toISOString().split('T')[0] : '',
         to: maxDate ? maxDate.toISOString().split('T')[0] : ''
@@ -1389,27 +2236,89 @@ export class AttendanceService {
   }
 
   /**
-   * Parse CSV date format (M/D/YYYY or MM/DD/YYYY)
+   * Parse CSV date format - supports multiple formats:
+   * - M/D/YYYY or MM/DD/YYYY (US format)
+   * - DD/MM/YYYY (International/Bangladesh format)
+   * - YYYY-MM-DD (ISO format)
+   * - DD-MM-YYYY (Dash format)
    */
   private parseCsvDate(dateStr: string): Date | null {
-    if (!dateStr) return null;
-    
-    // Try M/D/YYYY format (1/1/2026)
-    const parts = dateStr.split('/');
+    if (!dateStr || typeof dateStr !== 'string') return null;
+
+    const trimmed = dateStr.trim();
+    if (!trimmed) return null;
+
+    // Try various date formats
+
+    // 1. M/D/YYYY or MM/DD/YYYY (US format - original)
+    let parts = trimmed.split('/');
     if (parts.length === 3) {
-      const month = parseInt(parts[0], 10) - 1; // 0-indexed
-      const day = parseInt(parts[1], 10);
+      const firstNum = parseInt(parts[0], 10);
+      const secondNum = parseInt(parts[1], 10);
       const year = parseInt(parts[2], 10);
-      
-      const date = new Date(year, month, day);
-      if (!isNaN(date.getTime())) {
-        return date;
+
+      // Validate year first
+      if (year < 2000 || year > 2100) {
+        return null;
+      }
+
+      // Try M/D/YYYY (US format: month/day/year)
+      // If first number > 12, it's likely DD/MM/YYYY
+      if (firstNum <= 12) {
+        const month = firstNum - 1; // 0-indexed
+        const day = secondNum;
+        if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+          const date = new Date(year, month, day);
+          if (!isNaN(date.getTime()) && date.getMonth() === month) {
+            return date;
+          }
+        }
+      }
+
+      // Try DD/MM/YYYY (International format: day/month/year)
+      // If second number > 12, first must be day
+      if (secondNum <= 12) {
+        const day = firstNum;
+        const month = secondNum - 1;
+        if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+          const date = new Date(year, month, day);
+          if (!isNaN(date.getTime()) && date.getMonth() === month && date.getDate() === day) {
+            return date;
+          }
+        }
       }
     }
-    
-    // Fallback to standard parsing
-    const parsed = new Date(dateStr);
-    return isNaN(parsed.getTime()) ? null : parsed;
+
+    // 2. DD-MM-YYYY or YYYY-MM-DD (dash format)
+    parts = trimmed.split('-');
+    if (parts.length === 3) {
+      // YYYY-MM-DD (ISO format)
+      if (parts[0].length === 4) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        if (month >= 0 && month <= 11 && day >= 1 && day <= 31 && year > 2000) {
+          const date = new Date(year, month, day);
+          if (!isNaN(date.getTime())) return date;
+        }
+      }
+      // DD-MM-YYYY
+      else {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        if (month >= 0 && month <= 11 && day >= 1 && day <= 31 && year > 2000) {
+          const date = new Date(year, month, day);
+          if (!isNaN(date.getTime())) return date;
+        }
+      }
+    }
+
+    // 3. Fallback to standard JS parsing
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) return parsed;
+
+    return null;
   }
 
   /**
@@ -1434,71 +2343,124 @@ export class AttendanceService {
   }
 
   /**
-   * Get attendance summary for salary sheet from CSV logs
+   * Get attendance summary for salary sheet
+   * NOW USES: logs table with calculated fields
+   * This provides calculated_late, actual_absent, late_deduction_policy, etc.
+   * Accepts date range to support cross-month CSV imports (e.g., Feb 15 - March 15)
    */
-  async getSalaryAttendance(month: string): Promise<{
+  async getSalaryAttendance(fromDate: string, toDate: string): Promise<{
     empNo: string;
     empName: string;
     daysInMonth: number;
     payDays: number;
     presentDays: number;
     lateDays: number;
+    lateDeductionDays: number;
+    lateDeductionAmount: number;
     absentDays: number;
+    actualAbsent: number;
     fridayHolidays: number;
     weekends: number;
+    grossSalary: number;
+    basicSalary: number;
+    lateDeductionPolicy: string;
+    absentDeductionPolicy: string;
+    absentDeductionAmount: number;
   }[]> {
-    const [year, monthNum] = month.split('-').map(Number);
-    const daysInMonth = new Date(year, monthNum, 0).getDate();
+    const startDate = this.parseDateForSalary(fromDate);
+    const endDate = this.parseDateForSalary(toDate);
+    if (!startDate || !endDate) {
+      throw new Error(`Invalid salary sheet date range: ${fromDate} to ${toDate}`);
+    }
     
-    // Get all logs and filter by date in JavaScript to handle different date formats
-    const [rows] = await this.db.execute(
-      `SELECT 
-        \`Emp No.\` as empNo,
-        \`Name\` as empName,
-        \`Date\` as dateStr,
-        \`Status\` as status,
-        \`Late\` as late,
-        \`Absent\` as absent
-      FROM logs 
-      ORDER BY \`Emp No.\`, \`Date\``
+    // Calculate actual number of days in the requested range
+    const daysInMonth = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (daysInMonth <= 0) {
+      throw new Error(`Invalid salary sheet date range: ${fromDate} to ${toDate}`);
+    }
+
+    // Debug: Check available date range in logs table
+    const [dateRangeRows] = await this.db.execute(`
+      SELECT 
+        MIN(COALESCE(attendance_date, STR_TO_DATE(\`Date\`, '%m/%d/%Y'))) as minDate,
+        MAX(COALESCE(attendance_date, STR_TO_DATE(\`Date\`, '%m/%d/%Y'))) as maxDate,
+        COUNT(*) as totalRecords
+      FROM logs
+    `);
+    const dateRange = (dateRangeRows as any[])[0];
+    console.log(`[SalarySheet] Logs table date range: ${dateRange.minDate} to ${dateRange.maxDate}, total: ${dateRange.totalRecords} records`);
+    console.log(`[SalarySheet] Requested date range: ${fromDate} to ${toDate}`);
+
+    // Get data from logs table with calculated fields
+    const [logsRows] = await this.db.execute(
+      `SELECT
+        l.\`AC-No.\` as acNo,
+        l.\`No.\` as empNo,
+        l.\`Name\` as empName,
+        COALESCE(l.attendance_date, STR_TO_DATE(l.\`Date\`, '%m/%d/%Y')) as dateStr,
+        COALESCE(l.calculated_late, l.\`Late\`, '') as late,
+        COALESCE(l.late_minutes, 0) as lateMinutes,
+        l.actual_absent,
+        l.late_count,
+        l.late_deduction_days,
+        l.absent_deduction_amount,
+        l.late_deduction_policy,
+        l.absent_deduction_policy,
+        l.gross_salary,
+        l.\`Clock In\` as clockIn
+      FROM logs l
+      ORDER BY l.\`AC-No.\`, COALESCE(l.attendance_date, STR_TO_DATE(l.\`Date\`, '%m/%d/%Y'))`
     );
-    
-    const logs = rows as any[];
+
+    const records: any[] = logsRows as any[];
+    console.log(`[SalarySheet] Using ${records.length} records from logs table (all data, no date filter)`);
     
     // Group by employee
     const empMap = new Map<string, {
       empNo: string;
       empName: string;
+      grossSalary: number;
+      lateDeductionPolicy: string;
+      absentDeductionPolicy: string;
       records: any[];
     }>();
     
-    for (const log of logs) {
-      const key = log.empNo || log.empName;
+    // Debug: Track first few records
+    let debugLogCount = 0;
+    const maxDebugLogs = 10;
+    
+    for (const rec of records) {
+      const key = rec.acNo || rec.empNo || rec.empName;
       if (!key) continue;
       
-      // Filter by month - handle different date formats
-      const dateStr = log.dateStr;
+      const dateStr = rec.dateStr;
       if (!dateStr) continue;
-      
+
       const logDate = this.parseDateForSalary(dateStr);
       if (!logDate) continue;
-      
-      // Check if this record is in the requested month
-      if (logDate.getFullYear() !== year || logDate.getMonth() + 1 !== monthNum) {
-        continue;
+
+      // Debug log first few records
+      const hasClockIn = rec.clockIn && rec.clockIn.toString().trim() !== '';
+      const derivedStatus = hasClockIn ? 'Present' : 'Absent';
+      if (debugLogCount < maxDebugLogs) {
+        console.log(`[SalarySheetInput] ${key} | ${dateStr} | status="${derivedStatus}" | late="${rec.late}" | policy="${rec.late_deduction_policy}"`);
+        debugLogCount++;
       }
       
       if (!empMap.has(key)) {
         empMap.set(key, {
-          empNo: log.empNo,
-          empName: log.empName,
+          empNo: rec.empNo || key,
+          empName: rec.empName || '-',
+          grossSalary: parseFloat(rec.gross_salary) || 0,
+          lateDeductionPolicy: rec.late_deduction_policy || 'N/A',
+          absentDeductionPolicy: rec.absent_deduction_policy || 'N/A',
           records: []
         });
       }
-      empMap.get(key)!.records.push(log);
+      empMap.get(key)!.records.push(rec);
     }
     
-    // Calculate metrics for each employee
+    // Calculate metrics for each employee with policy-based deductions
     const results: {
       empNo: string;
       empName: string;
@@ -1506,9 +2468,17 @@ export class AttendanceService {
       payDays: number;
       presentDays: number;
       lateDays: number;
+      lateDeductionDays: number;
+      lateDeductionAmount: number;
       absentDays: number;
+      actualAbsent: number;
       fridayHolidays: number;
       weekends: number;
+      grossSalary: number;
+      basicSalary: number;
+      lateDeductionPolicy: string;
+      absentDeductionPolicy: string;
+      absentDeductionAmount: number;
     }[] = [];
     
     for (const [key, emp] of empMap) {
@@ -1519,6 +2489,8 @@ export class AttendanceService {
       let weekendCount = 0;
       
       const uniqueDates = new Set<string>();
+      let debugCount = 0;
+      const maxDebug = 20;
       
       for (const rec of emp.records) {
         const dateStr = rec.dateStr;
@@ -1527,30 +2499,73 @@ export class AttendanceService {
         
         // Parse date to check day of week
         const date = this.parseDateForSalary(dateStr);
+        let isFriday = false;
         if (date) {
-          const dayOfWeek = date.getDay(); // 0 = Sunday, 5 = Friday, 6 = Saturday
+          const dayOfWeek = date.getDay();
+          isFriday = dayOfWeek === 5;
           
           if (dayOfWeek === 5) fridayCount++;
           if (dayOfWeek === 0 || dayOfWeek === 6) weekendCount++;
         }
         
-        // Count statuses
-        const status = rec.status?.toString().trim();
-        const late = rec.late?.toString().trim();
-        const absent = rec.absent?.toString().trim();
+        // Derive status from clock-in data (no status column in attendance table)
+        const clockIn = rec.clockIn?.toString().trim();
+        const hasClockIn = clockIn && clockIn !== '';
+        const derivedStatus = hasClockIn ? 'Present' : 'Absent';
+        const storedLate = rec.late?.toString().trim();
         
-        if (status === 'Present' || status === 'P') {
+        if (hasClockIn) {
           presentDays++;
-        }
-        if (late && late !== '' && late !== '0' && late !== '00:00') {
-          lateDays++;
-        }
-        if (status === 'Absent' || status === 'A' || absent === '1') {
+        } else {
           absentDays++;
+        }
+        
+        // Count late days (excluding Friday) - only for present employees
+        if (!isFriday && hasClockIn) {
+          if (storedLate && storedLate.trim() !== '' && storedLate !== '00:00' && storedLate !== '0:00') {
+            lateDays++;
+          }
+        }
+        
+        if (debugCount < maxDebug) {
+          console.log(`[SalarySheetDebug] ${key} | ${dateStr} | clockIn=${clockIn} | isFriday=${isFriday} | storedLate=${storedLate} | presentDays=${presentDays} | lateDays=${lateDays} | absentDays=${absentDays}`);
+          debugCount++;
         }
       }
       
-      // Calculate pay days (present days, excluding weekends/holidays from deduction)
+      // Calculate late deduction based on policy (6 late = 1 absent)
+      const lateDeductionPolicy = emp.lateDeductionPolicy || 'N/A';
+      let lateDeductionDays = 0;
+      let lateDeductionAmount = 0;
+      
+      if (lateDeductionPolicy === 'APPLICABLE' && lateDays > 0) {
+        lateDeductionDays = Math.floor(lateDays / 6);
+      }
+      
+      // Calculate actual absent (original + late deduction)
+      const actualAbsent = absentDays + lateDeductionDays;
+      
+      // Calculate absent deduction amount based on policy
+      const absentDeductionPolicy = emp.absentDeductionPolicy || 'N/A';
+      let absentDeductionAmount = 0;
+      
+      if (actualAbsent > 0 && emp.grossSalary > 0) {
+        if (absentDeductionPolicy === 'ON_GROSS') {
+          const perDayGross = emp.grossSalary / daysInMonth;
+          absentDeductionAmount = perDayGross * actualAbsent;
+          lateDeductionAmount = perDayGross * lateDeductionDays;
+        } else if (absentDeductionPolicy === 'ON_BASIC') {
+          // Use 50% of gross as basic salary (standard calculation)
+          const basicSalary = emp.grossSalary * 0.5;
+          const perDayBasic = basicSalary / daysInMonth;
+          absentDeductionAmount = perDayBasic * actualAbsent;
+          lateDeductionAmount = perDayBasic * lateDeductionDays;
+        }
+      }
+      
+      console.log(`[SalarySheetSummary] ${key}: Present=${presentDays}, Late=${lateDays}, LateDeduction=${lateDeductionDays}, Absent=${absentDays}, ActualAbsent=${actualAbsent}, Policy=${lateDeductionPolicy}`);
+      
+      // Calculate pay days (present days)
       const payDays = presentDays;
       
       results.push({
@@ -1560,21 +2575,35 @@ export class AttendanceService {
         payDays,
         presentDays,
         lateDays,
+        lateDeductionDays,
+        lateDeductionAmount: Math.round(lateDeductionAmount * 100) / 100,
         absentDays,
+        actualAbsent,
         fridayHolidays: fridayCount,
-        weekends: weekendCount
+        weekends: weekendCount,
+        grossSalary: emp.grossSalary,
+        basicSalary: emp.grossSalary * 0.5,
+        lateDeductionPolicy,
+        absentDeductionPolicy,
+        absentDeductionAmount: Math.round(absentDeductionAmount * 100) / 100
       });
     }
     
     return results;
   }
   
-  private parseDateForSalary(dateStr: string): Date | null {
+  private parseDateForSalary(dateStr: string | Date): Date | null {
     if (!dateStr) return null;
     
+    // If already a Date object, return it
+    if (dateStr instanceof Date) return dateStr;
+    
+    // Convert to string if needed
+    const str = dateStr.toString();
+    
     // Handle M/D/YYYY or MM/DD/YYYY
-    if (dateStr.includes('/')) {
-      const parts = dateStr.split('/');
+    if (str.includes('/')) {
+      const parts = str.split('/');
       if (parts.length === 3) {
         const month = parseInt(parts[0], 10) - 1;
         const day = parseInt(parts[1], 10);
@@ -1584,8 +2613,8 @@ export class AttendanceService {
     }
     
     // Handle YYYY-MM-DD
-    if (dateStr.includes('-')) {
-      const parts = dateStr.split('-');
+    if (str.includes('-')) {
+      const parts = str.split('-');
       if (parts.length === 3) {
         const year = parseInt(parts[0], 10);
         const month = parseInt(parts[1], 10) - 1;
@@ -1595,5 +2624,218 @@ export class AttendanceService {
     }
     
     return null;
+  }
+
+  /**
+   * Get all unique employees from CSV uploads (csv_employees table)
+   * Used for policy tagging, salary sheet, and reports
+   */
+  async getCsvEmployees(search?: string): Promise<{
+    id: number;
+    empNo: string;
+    acNo: string;
+    no: string;
+    name: string;
+    department: string;
+    isActive: boolean;
+    policyTaggingId: number | null;
+    createdAt: string;
+    updatedAt: string;
+  }[]> {
+    try {
+      let query = `
+        SELECT 
+          id,
+          \`Emp No.\` as empNo,
+          \`AC-No.\` as acNo,
+          \`No.\` as no,
+          \`Name\` as name,
+          Department as department,
+          is_active as isActive,
+          policy_tagging_id as policyTaggingId,
+          created_at as createdAt,
+          updated_at as updatedAt
+        FROM csv_employees 
+        WHERE is_active = TRUE
+      `;
+      const params: any[] = [];
+
+      // Search by Name only
+      if (search && search.trim()) {
+        query += ` AND \`Name\` LIKE ?`;
+        params.push(`%${search.trim()}%`);
+      }
+
+      query += ` ORDER BY \`Name\` ASC`;
+
+      const [rows] = await this.db.execute(query, params);
+      return rows as any[];
+    } catch (error) {
+      console.error('[CSV Employees] Error fetching employees:', error);
+      // If table doesn't exist, return empty array
+      return [];
+    }
+  }
+
+  /**
+   * Get a single CSV employee by AC-No. (primary lookup key)
+   */
+  async getCsvEmployeeByACNo(acNo: string): Promise<{
+    id: number;
+    empNo: string;
+    acNo: string;
+    no: string;
+    name: string;
+    department: string;
+    policyTaggingId: number | null;
+  } | null> {
+    try {
+      const [rows] = await this.db.execute(
+        `SELECT 
+          id,
+          \`Emp No.\` as empNo,
+          \`AC-No.\` as acNo,
+          \`No.\` as no,
+          \`Name\` as name,
+          Department as department,
+          policy_tagging_id as policyTaggingId
+        FROM csv_employees 
+        WHERE \`AC-No.\` = ? AND is_active = TRUE
+        LIMIT 1`,
+        [acNo]
+      );
+      
+      const employees = rows as any[];
+      return employees.length > 0 ? employees[0] : null;
+    } catch (error) {
+      console.error(`[CSV Employees] Error fetching employee by AC-No. ${acNo}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Deprecated: Get a single CSV employee by emp_code
+   * Use getCsvEmployeeByACNo instead
+   */
+  async getCsvEmployeeByCode(empCode: string): Promise<any | null> {
+    return this.getCsvEmployeeByACNo(empCode);
+  }
+
+  /**
+   * Update policy tagging for a CSV employee
+   * Uses AC-No. as primary lookup key
+   */
+  async updateCsvEmployeePolicy(acNo: string, policyTaggingId: number | null): Promise<boolean> {
+    try {
+      await this.db.execute(
+        `UPDATE csv_employees 
+         SET policy_tagging_id = ?, updated_at = NOW()
+         WHERE \`AC-No.\` = ?`,
+        [policyTaggingId, acNo]
+      );
+      return true;
+    } catch (error) {
+      console.error(`[CSV Employees] Error updating policy for AC-No. ${acNo}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Lookup CSV employee by any identifier (Emp No., AC-No., No., or Name)
+   * Returns the 4 CSV columns and other employee info
+   */
+  async lookupCsvEmployee(identifier: string): Promise<{
+    empNo: string;
+    acNo: string;
+    no: string;
+    name: string;
+    department: string;
+  } | null> {
+    if (!identifier || identifier.trim() === '') {
+      return null;
+    }
+
+    try {
+      // Try to find by any of the 4 columns
+      const [rows] = await this.db.execute(
+        `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`, Department
+         FROM csv_employees
+         WHERE \`Emp No.\` = ? OR \`AC-No.\` = ? OR \`No.\` = ? OR \`Name\` LIKE ?
+         LIMIT 1`,
+        [identifier, identifier, identifier, `%${identifier}%`]
+      );
+
+      const csvEmps = rows as any[];
+      if (csvEmps.length > 0) {
+        return {
+          empNo: csvEmps[0]['Emp No.'] || '',
+          acNo: csvEmps[0]['AC-No.'] || '',
+          no: csvEmps[0]['No.'] || '',
+          name: csvEmps[0]['Name'] || '',
+          department: csvEmps[0]['Department'] || ''
+        };
+      }
+    } catch (error) {
+      console.error(`[CSV Employees] Error looking up employee ${identifier}:`, error);
+    }
+
+    return null;
+  }
+
+  /**
+   * Remove employee data (No., Name, Department) from employees table
+   * Keeps the employee record but clears the CSV-imported fields
+   */
+  async removeEmployeeData(acNos: string[]): Promise<{ success: boolean; message: string; removed: number }> {
+    try {
+      let removed = 0;
+
+      for (const acNo of acNos) {
+        const [result] = await this.db.execute(
+          `UPDATE employees
+           SET \`No.\` = NULL,
+               \`Name\` = NULL,
+               department = NULL,
+               updated_at = NOW()
+           WHERE \`AC-No.\` = ?`,
+          [acNo]
+        );
+
+        const affected = (result as any).affectedRows;
+        if (affected > 0) {
+          removed++;
+        }
+      }
+
+      return {
+        success: true,
+        message: `Removed data for ${removed} employee(s)`,
+        removed
+      };
+    } catch (error: any) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[CSV Employees] Error removing employee data:', message);
+      throw new Error(`Failed to remove employee data: ${message}`);
+    }
+  }
+
+  /**
+   * Clear all data from logs table before reupload
+   */
+  async clearLogs(): Promise<{ success: boolean; message: string; deleted: number }> {
+    try {
+      const [result] = await this.db.execute(`DELETE FROM logs`);
+      const deleted = (result as any).affectedRows;
+
+      return {
+        success: true,
+        message: `Cleared ${deleted} records from logs table`,
+        deleted
+      };
+    } catch (error: any) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[CSV Import] Error clearing logs:', message);
+      throw new Error(`Failed to clear logs: ${message}`);
+    }
   }
 }

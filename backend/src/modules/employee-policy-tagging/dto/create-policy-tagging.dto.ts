@@ -1,16 +1,15 @@
 import { IsString, IsOptional } from 'class-validator';
 
 export class CreatePolicyTaggingDto {
+  // 2 Identity Columns - READ ONLY from csv_employees table
+  // These are looked up automatically from CSV upload, not entered manually
   @IsString()
-  empCode: string;
+  @IsOptional()
+  acNo?: string;   // `AC-No.` - READ ONLY from CSV (lookup key for reference only)
 
   @IsString()
   @IsOptional()
-  empId?: string;
-
-  @IsString()
-  @IsOptional()
-  empName?: string;
+  name?: string;   // `Name` - READ ONLY from CSV (for reference only)
 
   @IsString()
   @IsOptional()
@@ -167,11 +166,11 @@ export class CreatePolicyTaggingDto {
 
   @IsString()
   @IsOptional()
-  hdDeductRuleRule?: string;
+  hdDeductRulePolicyRule?: string;
 
   @IsString()
   @IsOptional()
-  hdDeductRuleDate?: string;
+  hdDeductRulePolicyDate?: string;
 }
 
 export class UpdatePolicyTaggingDto extends CreatePolicyTaggingDto {}

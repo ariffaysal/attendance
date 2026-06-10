@@ -1,20 +1,29 @@
 import { IsString, IsOptional } from 'class-validator';
 
 export class CreateEmployeeDto {
+  // CSV 4 Columns - READ ONLY from csv_employees table
+  // emp_code maps to `No.`, emp_id maps to `Emp No.`, punch_card maps to `AC-No.`
+  // These are looked up from CSV upload, not entered manually
   @IsString()
-  emp_code: string;
+  @IsOptional()
+  emp_code?: string;  // Maps to `No.` - READ ONLY from CSV
 
   @IsString()
-  emp_id: string;
+  @IsOptional()
+  emp_id?: string;   // Maps to `Emp No.` - READ ONLY from CSV
 
   @IsString()
-  punch_card: string;
+  @IsOptional()
+  punch_card?: string; // Maps to `AC-No.` - READ ONLY from CSV
+
+  // Name comes from CSV `Name` column - READ ONLY
+  @IsString()
+  @IsOptional()
+  full_name_bangla?: string;
 
   @IsString()
-  full_name_bangla: string;
-
-  @IsString()
-  full_name_english: string;
+  @IsOptional()
+  full_name_english?: string;
 
   @IsString()
   @IsOptional()

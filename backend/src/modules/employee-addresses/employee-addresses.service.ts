@@ -14,7 +14,13 @@ export class EmployeeAddressesService {
     if (!row) return null;
     return {
       id: row.id,
-      empCode: row.emp_code,
+      // CSV 4 identity columns from csv_employees (PRIORITY)
+      empNo: row['Emp No.'] || row.emp_no || row.empNo || '',
+      acNo: row['AC-No.'] || row.ac_no || row.acNo || '',
+      no: row['No.'] || row.no || '',
+      name: row['Name'] || row.name || '',
+      // Local record emp_code (for reference)
+      empCode: row['No.'] || row.no || row.emp_code || '',
       category: row.category,
       company: row.company,
       location: row.location,
@@ -50,24 +56,35 @@ export class EmployeeAddressesService {
   }
 
   async findAll(search?: string): Promise<any[]> {
-    let query = 'SELECT * FROM employee_addresses';
+    let query = `
+      SELECT ea.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+      FROM employee_addresses ea
+      LEFT JOIN csv_employees ce ON ea.emp_code = ce.\`No.\` OR ea.emp_code = ce.\`AC-No.\`
+    `;
     const params: any[] = [];
 
     if (search) {
-      query += ' WHERE emp_code LIKE ? OR present_district LIKE ? OR permanent_district LIKE ?';
+      query += `
+        WHERE ce.\`Name\` LIKE ? 
+           OR ce.\`AC-No.\` LIKE ?
+      `;
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm);
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY ce.`Name` ASC';
 
     const [rows] = await this.connection.execute(query, params);
     return (rows as any[]).map(row => this.transformToCamelCase(row));
   }
 
   async findOne(id: number): Promise<any> {
+    // Join with csv_employees to get the correct CSV 4 columns (source of truth)
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_addresses WHERE id = ?',
+      `SELECT ea.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+       FROM employee_addresses ea
+       LEFT JOIN csv_employees ce ON ea.emp_code = ce.\`No.\` OR ea.emp_code = ce.\`AC-No.\`
+       WHERE ea.id = ?`,
       [id],
     );
     
@@ -79,34 +96,89 @@ export class EmployeeAddressesService {
   }
 
   async findByEmpCode(empCode: string): Promise<any | null> {
+    // Join with csv_employees to get the correct CSV 4 columns (source of truth)
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_addresses WHERE emp_code = ?',
-      [empCode],
+      `SELECT ea.*, ce.\`Emp No.\`, ce.\`AC-No.\`, ce.\`No.\`, ce.\`Name\`
+       FROM employee_addresses ea
+       LEFT JOIN csv_employees ce ON ea.emp_code = ce.\`No.\` OR ea.emp_code = ce.\`AC-No.\`
+       WHERE ea.\`AC-No.\` = ? OR ea.\`No.\` = ?`,
+      [empCode, empCode],
     );
     
     const addresses = rows as any[];
-    return addresses.length > 0 ? addresses[0] : null;
+    return addresses.length > 0 ? this.transformToCamelCase(addresses[0]) : null;
+  }
+
+  async findByACNo(acNo: string): Promise<any | null> {
+    // Same logic as findByEmpCode - search by AC-No. or No.
+    return this.findByEmpCode(acNo);
+  }
+
+  /**
+   * Lookup the 4 CSV columns from csv_employees table
+   * Returns empty strings if not found (no auto-generation)
+   */
+  private async lookupCsvColumns(empCode: string): Promise<{ empNo: string; acNo: string; no: string; name: string }> {
+    const variations = [empCode];
+    if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+      variations.push(`EMP${empCode.substring(1)}`);
+      variations.push(empCode.substring(1));
+      variations.push(String(parseInt(empCode.substring(1), 10)));
+    } else if (!empCode.startsWith('EMP')) {
+      variations.push(`EMP${empCode}`);
+      variations.push(`E${empCode}`);
+    }
+
+    for (const codeVar of variations) {
+      const [rows] = await this.connection.execute(
+        `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\` FROM csv_employees WHERE \`AC-No.\` = ? OR \`No.\` = ? LIMIT 1`,
+        [codeVar, codeVar]
+      );
+      const csvEmps = rows as any[];
+      if (csvEmps.length > 0) {
+        return {
+          empNo: csvEmps[0]['Emp No.'] || '',
+          acNo: csvEmps[0]['AC-No.'] || '',
+          no: csvEmps[0]['No.'] || '',
+          name: csvEmps[0]['Name'] || ''
+        };
+      }
+    }
+
+    return { empNo: '', acNo: '', no: '', name: '' };
   }
 
   async create(dto: CreateEmployeeAddressDto): Promise<any> {
-    // Check for duplicate emp_code
-    const existing = await this.findByEmpCode(dto.empCode);
-    if (existing) {
-      throw new Error('Employee code already exists');
+    // Lookup 4 CSV columns from csv_employees (CSV is the source of truth)
+    const csvData = await this.lookupCsvColumns(dto.empCode);
+    
+    // Check for duplicate using AC-No.
+    if (csvData.acNo) {
+      const existing = await this.findByEmpCode(csvData.acNo);
+      if (existing) {
+        throw new Error('Employee address already exists for this AC-No.');
+      }
     }
 
     const sql = `
       INSERT INTO employee_addresses (
-        emp_code, category, company, location, division_org, department, section, subsection, designation,
+        emp_code,
+        \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`,
+        category, company, location, division_org, department, section, subsection, designation,
         present_village_area, present_house_no, present_road_no, present_post_office_code, present_thana,
         present_district, present_division_geo, present_land_phone, present_cell_phone, present_email,
         is_same_as_present, permanent_village_area, permanent_house_no, permanent_road_no, permanent_post_office_code,
         permanent_thana, permanent_district, permanent_division_geo, permanent_land_phone, permanent_cell_phone, permanent_email
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
+    // CSV columns come ONLY from csv_employees table
     const values = [
-      dto.empCode,
+      dto.empCode || null,
+      csvData.empNo || null,
+      csvData.acNo || null,
+      csvData.no || null,
+      csvData.name || null,
       dto.category || null,
       dto.company || null,
       dto.location || null,
@@ -152,18 +224,9 @@ export class EmployeeAddressesService {
       [id],
     );
     const rawExisting = (existingRows as any[])[0];
-    
-    // Check if emp_code is being changed and if new code already exists
-    if (dto.empCode && dto.empCode !== existing.empCode) {
-      const duplicate = await this.findByEmpCode(dto.empCode);
-      if (duplicate && duplicate.id !== id) {
-        throw new Error('Employee code already exists');
-      }
-    }
 
     const sql = `
       UPDATE employee_addresses SET
-        emp_code = ?,
         category = ?,
         company = ?,
         location = ?,
@@ -196,8 +259,8 @@ export class EmployeeAddressesService {
       WHERE id = ?
     `;
 
+    // CSV columns (Emp No., AC-No., No., Name) are NOT updated - they remain from CSV
     const values = [
-      dto.empCode || rawExisting.emp_code,
       dto.category !== undefined ? dto.category : rawExisting.category,
       dto.company !== undefined ? dto.company : rawExisting.company,
       dto.location !== undefined ? dto.location : rawExisting.location,

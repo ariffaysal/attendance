@@ -1,4 +1,5 @@
-import { IsString, IsEmail, IsOptional, IsBoolean, MinLength } from 'class-validator';
+import { IsString, IsEmail, IsOptional, IsBoolean, MinLength, IsEnum } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class UpdateUserDto {
   @IsString()
@@ -18,7 +19,12 @@ export class UpdateUserDto {
   @IsOptional()
   password?: string;
 
+  @Transform(({ value }) => value === 'true' || value === true || value === '1' || value === 1)
   @IsBoolean()
   @IsOptional()
   isActive?: boolean;
+
+  @IsEnum(['admin', 'staff', 'hr'])
+  @IsOptional()
+  role?: 'admin' | 'staff' | 'hr';
 }

@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form';
 import { EmployeeAddress } from '@/types/employee-address';
 import { employeeAddressService } from '@/services/employee-address.service';
 import { employeeService, EmployeeSuggestion } from '@/services/employee.service';
+import { csvEmployeeService } from '@/services/csv-employees.service';
 import EmployeeSearch from '@/components/EmployeeSearch';
 
 // Dropdown options (same as employee form)
@@ -22,6 +23,14 @@ const CARD_ICONS = {
   permanent: 'fa-home',
 };
 
+// CSV 4 Columns Interface
+interface CsvColumns {
+  empNo: string;  // Emp No.
+  acNo: string;   // AC-No.
+  no: string;     // No.
+  name: string;   // Name
+}
+
 export default function EmployeeAddressFormPage() {
   const router = useRouter();
   const params = useParams();
@@ -35,6 +44,15 @@ export default function EmployeeAddressFormPage() {
   const [validatingEmployee, setValidatingEmployee] = useState(false);
   const [employeeError, setEmployeeError] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  
+  // CSV 4 Columns - Auto-populated from csv_employees
+  const [csvColumns, setCsvColumns] = useState<CsvColumns>({
+    empNo: '',
+    acNo: '',
+    no: '',
+    name: '',
+  });
+  const [lookingUpCsv, setLookingUpCsv] = useState(false);
 
   const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<EmployeeAddress>({
     mode: 'onChange',
@@ -78,8 +96,16 @@ export default function EmployeeAddressFormPage() {
     setEmployeeError(null);
     setDuplicateError(null);
     
+    // Auto-populate CSV 4 columns from employee data
+    setCsvColumns({
+      empNo: employee.empNo || employee.emp_id || '',
+      acNo: employee.acNo || '',
+      no: employee.no || employee.emp_code || '',
+      name: employee.name || employee.full_name_english || '',
+    });
+    
     // Auto-populate form fields
-    setValue('empCode', employee.emp_code);
+    setValue('empCode', employee.no || employee.emp_code || '');
     setValue('department', employee.department || '');
     setValue('designation', employee.designation || '');
     setValue('company', employee.company || '');
@@ -88,9 +114,9 @@ export default function EmployeeAddressFormPage() {
     if (!isEdit) {
       try {
         setValidatingEmployee(true);
-        const existing = await employeeAddressService.getByEmpCode(employee.emp_code);
+        const existing = await employeeAddressService.getByEmpCode(employee.no || employee.emp_code || '');
         if (existing) {
-          setDuplicateError(`Employee ${employee.full_name_english} (${employee.emp_code}) already has address information.`);
+          setDuplicateError(`Employee ${employee.name || employee.full_name_english} (${employee.no || employee.emp_code}) already has address information.`);
         }
       } catch (err) {
         // Employee doesn't have address yet - good
@@ -120,6 +146,11 @@ export default function EmployeeAddressFormPage() {
             department: result.employee.department,
             designation: result.employee.designation,
             company: result.employee.company,
+            // CSV 4 columns
+            empNo: result.employee.empNo,
+            acNo: result.employee.acNo,
+            no: result.employee.no,
+            name: result.employee.name,
           });
         } else {
           setEmployeeError(`Employee with code '${value}' not found in system.`);
@@ -134,11 +165,57 @@ export default function EmployeeAddressFormPage() {
     }
   };
 
-  async function loadEmployeeAddress() {
+  // Lookup CSV employee by any of the 4 columns
+  const lookupCsvEmployee = async (identifier: string) => {
+    if (!identifier || identifier.trim().length < 2) return;
+    
     try {
-      const data = await employeeAddressService.getById(Number(params.id));
+      setLookingUpCsv(true);
+      const result = await csvEmployeeService.lookup(identifier);
+      if (result) {
+        setCsvColumns({
+          empNo: result.empNo || '',
+          acNo: result.acNo || '',
+          no: result.no || '',
+          name: result.name || '',
+        });
+        // Also set the department if available
+        if (result.department) {
+          setValue('department', result.department);
+        }
+      }
+    } catch (err) {
+      console.error('CSV lookup error:', err);
+    } finally {
+      setLookingUpCsv(false);
+    }
+  };
+
+  async function loadEmployeeAddress() {
+    const id = Number(params.id);
+    if (!id || isNaN(id)) {
+      setError('Invalid employee address ID');
+      setLoading(false);
+      return;
+    }
+    try {
+      const data = await employeeAddressService.getById(id);
       reset(data);
       setSameAsPresent(data.isSameAsPresent || false);
+      
+      // Set CSV columns from loaded data for reference
+      setCsvColumns({
+        empNo: data.empNo || '',
+        acNo: data.acNo || '',
+        no: data.no || '',
+        name: data.name || '',
+      });
+      
+      // Set employee code if available
+      if (data.empCode) {
+        setValue('empCode', data.empCode);
+      }
+      
       setLoading(false);
     } catch (error) {
       console.error('Failed to load employee address:', error);
@@ -288,13 +365,92 @@ export default function EmployeeAddressFormPage() {
                     {selectedEmployee && !employeeError && !duplicateError && (
                       <div className="small text-success mt-1">
                         <i className="fas fa-check-circle me-1"></i> 
-                        {selectedEmployee.full_name_english} validated
+                        <strong>{selectedEmployee.name || selectedEmployee.full_name_english}</strong> validated | 
+                        No: <strong>{selectedEmployee.no || selectedEmployee.emp_code}</strong> | 
+                        AC-No: <strong>{selectedEmployee.acNo || 'N/A'}</strong> | 
+                        Emp No: <strong>{selectedEmployee.empNo || selectedEmployee.emp_id || 'N/A'}</strong>
                       </div>
                     )}
                   </div>
                   <div className="col-md-6">
                     {/* Spacer for alignment */}
                   </div>
+                </div>
+                
+                {/* CSV 4 Columns - Auto-populated from CSV */}
+                <div className="row g-3 mt-2">
+                  <div className="col-12">
+                    <div className="d-flex align-items-center mb-2">
+                      <h6 className="mb-0 text-info">
+                        <i className="fas fa-file-csv me-2"></i>
+                        CSV Employee Data (Auto-populated)
+                      </h6>
+                      {lookingUpCsv && (
+                        <span className="ms-2 small text-muted">
+                          <i className="fas fa-spinner fa-spin me-1"></i> Looking up...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label text-muted small">Emp No. (CSV)</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm bg-light"
+                      placeholder="Enter Emp No."
+                      value={csvColumns.empNo}
+                      onChange={(e) => {
+                        setCsvColumns(prev => ({ ...prev, empNo: e.target.value }));
+                      }}
+                      onBlur={(e) => lookupCsvEmployee(e.target.value)}
+                    />
+                    <small className="text-muted">Enter to lookup</small>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label text-muted small">AC-No. (CSV)</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm bg-light"
+                      placeholder="Enter AC-No."
+                      value={csvColumns.acNo}
+                      onChange={(e) => {
+                        setCsvColumns(prev => ({ ...prev, acNo: e.target.value }));
+                      }}
+                      onBlur={(e) => lookupCsvEmployee(e.target.value)}
+                    />
+                    <small className="text-muted">Enter to lookup</small>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label text-muted small">No. (CSV)</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm bg-light"
+                      placeholder="Enter No."
+                      value={csvColumns.no}
+                      onChange={(e) => {
+                        setCsvColumns(prev => ({ ...prev, no: e.target.value }));
+                      }}
+                      onBlur={(e) => lookupCsvEmployee(e.target.value)}
+                    />
+                    <small className="text-muted">Enter to lookup</small>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label text-muted small">Name (CSV)</label>
+                    <input
+                      type="text"
+                      className="form-control form-control-sm bg-light"
+                      placeholder="Enter Name"
+                      value={csvColumns.name}
+                      onChange={(e) => {
+                        setCsvColumns(prev => ({ ...prev, name: e.target.value }));
+                      }}
+                      onBlur={(e) => lookupCsvEmployee(e.target.value)}
+                    />
+                    <small className="text-muted">Enter to lookup</small>
+                  </div>
+                </div>
+                
+                <div className="row g-4 mt-2">
                   <div className="col-md-3">
                     <label className="form-label">Category <span className="required">*</span></label>
                     <select 

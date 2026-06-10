@@ -3,6 +3,10 @@ import { Employee, CreateEmployeeData } from '@/types/employee';
 
 export interface EmployeeSuggestion {
   id: number;
+  // 2 Identity Columns (source of truth from csv_employees)
+  acNo: string;     // `AC-No.` from CSV
+  name: string;     // `Name` from CSV
+  // Legacy fields (for backward compatibility)
   emp_code: string;
   emp_id: string;
   full_name_english: string;
@@ -10,6 +14,9 @@ export interface EmployeeSuggestion {
   department?: string;
   designation?: string;
   company?: string;
+  // Deprecated fields (kept for backward compatibility)
+  empNo?: string;    // `Emp No.` from CSV (deprecated)
+  no?: string;       // `No.` from CSV (deprecated)
 }
 
 export const employeeService = {
@@ -40,9 +47,12 @@ export const employeeService = {
   /**
    * Get employee search suggestions for autocomplete
    */
-  async getSearchSuggestions(query?: string, limit?: number): Promise<EmployeeSuggestion[]> {
+  async getSearchSuggestions(query?: string, limit?: number, searchType?: 'name' | 'acc_no'): Promise<EmployeeSuggestion[]> {
+    const params: any = { q: query };
+    if (limit) params.limit = limit;
+    if (searchType) params.searchType = searchType;
     const response = await api.get('/employees/search/suggestions', {
-      params: { q: query, limit }
+      params
     });
     return response.data;
   },

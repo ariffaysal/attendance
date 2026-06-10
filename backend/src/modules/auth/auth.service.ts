@@ -64,7 +64,7 @@ export class AuthService {
 
     // Find user by employee_id
     const [users] = await this.connection.execute(
-      'SELECT id, employee_id, email, mobile_number, password_hash, is_active FROM auth_users WHERE employee_id = ?',
+      'SELECT id, employee_id, email, mobile_number, role, password_hash, is_active FROM auth_users WHERE employee_id = ?',
       [employeeId],
     );
 
@@ -98,13 +98,14 @@ export class AuthService {
         employeeId: user.employee_id,
         email: user.email,
         mobileNumber: user.mobile_number,
+        role: user.role || 'staff',
       },
     };
   }
 
   async validateUser(employeeId: string) {
     const [users] = await this.connection.execute(
-      'SELECT id, employee_id, email, mobile_number, is_active FROM auth_users WHERE employee_id = ?',
+      'SELECT id, employee_id, email, mobile_number, role, is_active FROM auth_users WHERE employee_id = ?',
       [employeeId],
     );
 
@@ -119,6 +120,7 @@ export class AuthService {
       employeeId: user.employee_id,
       email: user.email,
       mobileNumber: user.mobile_number,
+      role: user.role || 'staff',
     };
   }
 

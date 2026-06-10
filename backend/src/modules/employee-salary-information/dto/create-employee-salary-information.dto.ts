@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsArray, ValidateNested } from 'class-validator';
+import { IsString, IsOptional, IsArray, ValidateNested, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class BankInfoDto {
@@ -69,6 +69,18 @@ export class CreateEmployeeSalaryInformationDto {
   @IsString()
   @IsOptional()
   empName?: string;
+
+  @IsString()
+  @IsOptional()
+  empNo?: string;
+
+  @IsString()
+  @IsOptional()
+  acNo?: string;
+
+  @IsString()
+  @IsOptional()
+  no?: string;
 
   @IsString()
   @IsOptional()
@@ -160,3 +172,25 @@ export class CreateEmployeeSalaryInformationDto {
 }
 
 export class UpdateEmployeeSalaryInformationDto extends CreateEmployeeSalaryInformationDto {}
+
+// DTO for updating salary deductions (absent amount, late deduction, final payable)
+export class SalaryDeductionsDto {
+  @IsString()
+  empCode: string;
+
+  @IsNumber()
+  @IsOptional()
+  absentAmount?: number;
+
+  @IsNumber()
+  @IsOptional()
+  lateDeduct?: number;
+
+  @IsNumber()
+  @IsOptional()
+  totalDeductions?: number;
+
+  @IsNumber()
+  @IsOptional()
+  finalPayable?: number;
+}

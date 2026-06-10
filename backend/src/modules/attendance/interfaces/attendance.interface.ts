@@ -64,10 +64,11 @@ export interface JobCardSummary {
 }
 
 export interface JobCardEmployee {
-  empId: string;
-  name: string;
-  empCode: string;
-  idCard: string;
+  // CSV 4 identity columns from csv_employees table
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
   dept: string;
   summary: JobCardSummary;
   records: JobCardDailyRecord[];
@@ -85,9 +86,11 @@ export interface JobCardDailyRecord {
 }
 
 export interface MonthlyEmployee {
-  empId: string;
-  name: string;
-  no: string;
+  // CSV 4 identity columns from csv_employees table
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
   records: MonthlyDailyRecord[];
   present: number;
   absent: number;
@@ -101,4 +104,25 @@ export interface MonthlyDailyRecord {
   out: string;
   ot: string;
   late: string;
+}
+
+// Salary Attendance with calculated late/absent and policy deductions
+export interface SalaryAttendance {
+  empNo: string;
+  empName: string;
+  daysInMonth: number;
+  payDays: number;
+  presentDays: number;
+  lateDays: number;
+  lateDeductionDays: number;      // 6 late = 1 absent
+  lateDeductionAmount: number;    // Calculated late deduction amount
+  absentDays: number;
+  actualAbsent: number;           // absent + late deduction
+  fridayHolidays: number;
+  weekends: number;
+  grossSalary: number;
+  basicSalary: number;
+  lateDeductionPolicy: string;    // APPLICABLE / NOT_APPLICABLE / N/A
+  absentDeductionPolicy: string;  // ON_GROSS / ON_BASIC / N/A
+  absentDeductionAmount: number;  // Calculated deduction amount
 }

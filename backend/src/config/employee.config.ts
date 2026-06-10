@@ -1,5 +1,5 @@
 export const EMPLOYEE_BASIC_FIELDS = [
-  'emp_code', 'emp_id', 'punch_card'
+  '`Emp No.`', '`AC-No.`', '`No.`', '`Name`', 'emp_code', 'emp_id', 'punch_card'
 ];
 
 export const EMPLOYEE_NAME_FIELDS = [

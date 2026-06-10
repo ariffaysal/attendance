@@ -1,5 +1,7 @@
 import { api } from './api';
 
+export type Role = 'admin' | 'staff' | 'hr';
+
 export interface LoginData {
   employeeId: string;
   password: string;
@@ -32,6 +34,7 @@ export interface User {
   employeeId: string;
   email: string;
   mobileNumber: string;
+  role?: Role;
 }
 
 export interface AuthResponse {
@@ -81,6 +84,11 @@ export const authService = {
   logout(): void {
     localStorage.removeItem(STORAGE_KEY);
     removeCookie(COOKIE_KEY);
+  },
+
+  syncCookie(employeeId: string): void {
+    // Re-set cookie to ensure middleware can detect auth state
+    setCookie(COOKIE_KEY, employeeId);
   },
 
   getCurrentUser(): User | null {

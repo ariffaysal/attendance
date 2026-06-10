@@ -22,7 +22,7 @@ const navItems: NavItem[] = [
       { href: '/job-cards', label: 'Job Cards', icon: 'fa-id-card' },
       { href: '/monthly', label: 'Reports', icon: 'fa-calendar-alt' },
       { href: '/salary-sheet', label: 'Salary Sheet', icon: 'fa-file-invoice-dollar' },
-      { href: '/csv-import', label: 'Upload CSV', icon: 'fa-file-csv' },
+      { href: '/csv-upload', label: 'Upload CSV', icon: 'fa-file-csv' },
     ],
   },
   {
@@ -132,6 +132,14 @@ const navItems: NavItem[] = [
       { href: '/hrm/reports', label: 'Reports', icon: 'fa-file-alt' },
     ],
   },
+  {
+    label: 'Policy Leave',
+    icon: 'fa-file-signature',
+    children: [
+      { href: '/hrm/leave-management/opening-leave-entry', label: 'Opening Leave Entry', icon: 'fa-door-open' },
+      { href: '/hrm/leave-management/leave-entry', label: 'Leave Entry', icon: 'fa-plus-circle' },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -139,6 +147,29 @@ export function Sidebar() {
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
   const [expandedSubMenu, setExpandedSubMenu] = useState<string | null>(null);
   const { user, logout } = useAuth();
+
+  const filteredNavItems = navItems.map(item => {
+    if (user?.role === 'staff') {
+      if (item.label === 'Attendance') {
+        return {
+          ...item,
+          children: item.children?.filter(child =>
+            ['Dashboard', 'Job Cards', 'Reports'].includes(child.label)
+          )
+        };
+      }
+      return null;
+    }
+
+    if (user?.role === 'hr' && item.label === 'Library') {
+      return {
+        ...item,
+        children: item.children?.filter(child => child.href !== '/library/assign-users'),
+      };
+    }
+
+    return item;
+  }).filter(Boolean) as NavItem[];
 
   const toggleMenu = (label: string) => {
     setExpandedMenu(expandedMenu === label ? null : label);
@@ -174,7 +205,7 @@ export function Sidebar() {
         </Link>
       </div>
       <div className="sidebar-nav">
-        {navItems.map((item) => (
+        {filteredNavItems.map((item) => (
           <div key={item.label}>
             {item.children ? (
               <>
@@ -244,8 +275,11 @@ export function Sidebar() {
               <i className="fas fa-user me-2"></i>
               <span className="fw-semibold">{user.employeeId}</span>
             </div>
-            <div className="text-slate-400 text-xs mb-3">
+            <div className="text-slate-400 text-xs mb-1">
               {user.email}
+            </div>
+            <div className="text-slate-400 text-xs mb-3">
+              Role: {user.role === 'admin' ? 'Admin' : user.role === 'hr' ? 'HR' : 'Staff'}
             </div>
           </div>
         )}
@@ -255,12 +289,14 @@ export function Sidebar() {
         >
           <i className="fas fa-sign-out-alt me-2"></i> Logout
         </button>
-        <button
-          className="btn btn-outline-danger btn-sm w-100"
-          onClick={handleReset}
-        >
-          <i className="fas fa-trash-alt me-2"></i> Reset Data
-        </button>
+        {['admin', 'hr'].includes(user?.role || '') && (
+          <button
+            className="btn btn-outline-danger btn-sm w-100"
+            onClick={handleReset}
+          >
+            <i className="fas fa-trash-alt me-2"></i> Reset Data
+          </button>
+        )}
       </div>
     </div>
   );

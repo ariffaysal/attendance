@@ -11,9 +11,15 @@ export class EmployeePolicyTaggingController {
     return this.employeePolicyTaggingService.findAll(search);
   }
 
+  @Get('by-acno/:acNo')
+  async findByACNo(@Param('acNo') acNo: string) {
+    return this.employeePolicyTaggingService.findByACNo(acNo);
+  }
+
+  // Alias for backward compatibility
   @Get('by-empcode/:empCode')
   async findByEmpCode(@Param('empCode') empCode: string) {
-    return this.employeePolicyTaggingService.findByEmpCode(empCode);
+    return this.employeePolicyTaggingService.findByACNo(empCode);
   }
 
   @Get(':id')

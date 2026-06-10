@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { attendanceService, SearchParams } from '@/services/attendance.service';
 import { employeeSalaryInformationService } from '@/services/employee-salary-information.service';
+import { employeePolicyTaggingService } from '@/services/employee-policy-tagging.service';
 import { api, unwrapResponse } from '@/services/api';
 import { EmployeeSalaryInformation, SalaryBreakdown, BankInfo } from '@/types/employee-salary-information';
 import { SearchBar } from '@/components/dashboard/SearchBar';
@@ -13,7 +14,7 @@ interface SalaryComponent {
   houseRent: number;
   medical: number;
   transport: number;
-  food: number;
+  conveyance: number;
   gross: number;
 }
 
@@ -46,14 +47,15 @@ interface Overtime {
 }
 
 interface SalarySheetEmployee {
-  empId: string;
-  empCode: string;
-  empName: string;
+  // CSV 4 columns
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV - PRIMARY key
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
   designation: string;
   joinDate: string;
   grade: string;
   resignDate: string;
-  acNumber: string;
   salary: SalaryComponent;
   attendance: AttendanceDetail;
   deduction: Deduction;
@@ -106,9 +108,9 @@ const columnDefs = {
   el: { label: 'EL', min: 25, max: 40, fontSize: 9 },
   // Deduction
   absentAmt: { label: 'Absent Amt', min: 55, max: 80, fontSize: 9 },
-  lateDed: { label: 'Late Ded', min: 50, max: 75, fontSize: 9 },
+  lateDed: { label: 'Late Deduct', min: 60, max: 85, fontSize: 9 },
   leaveAmt: { label: 'Leave Amt', min: 50, max: 75, fontSize: 9 },
-  totalDed: { label: 'Total Ded', min: 55, max: 85, fontSize: 9 },
+  totalDed: { label: 'Total Late Deduction', min: 85, max: 110, fontSize: 9 },
   netPay: { label: 'Net Pay', min: 55, max: 80, fontSize: 9 },
   // Final
   netPayable: { label: 'Net Payable', min: 70, max: 100, fontSize: 10 },
@@ -122,8 +124,11 @@ export default function SalarySheetPage() {
   const [salaryData, setSalaryData] = useState<SalarySheetEmployee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedMonth, setSelectedMonth] = useState<string>(
-    new Date().toISOString().slice(0, 7)
+  const [fromDate, setFromDate] = useState<string>(
+    new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)
+  );
+  const [toDate, setToDate] = useState<string>(
+    new Date().toISOString().slice(0, 10)
   );
 
   const currentParams: SearchParams = {
@@ -135,22 +140,19 @@ export default function SalarySheetPage() {
 
   useEffect(() => {
     loadData();
-  }, [searchParams, selectedMonth]);
+  }, [searchParams, fromDate, toDate]);
 
   async function loadData() {
     setLoading(true);
     setError(null);
     try {
-      const [salaryInfoList, users] = await Promise.all([
-        employeeSalaryInformationService.getAll(currentParams.search),
-        attendanceService.getAllUsers(),
-      ]);
+      const salaryInfoList = await employeeSalaryInformationService.getAll(currentParams.search);
 
       // Get attendance data from CSV logs for salary sheet
       let attendanceData: any = {};
       let attendanceByName: any = {};
       try {
-        const salaryAttendance = await attendanceService.getSalaryAttendance(selectedMonth);
+        const salaryAttendance = await attendanceService.getSalaryAttendance(fromDate, toDate);
         
         salaryAttendance.forEach((emp: any) => {
           // Store by empNo (trimmed)
@@ -172,8 +174,31 @@ export default function SalarySheetPage() {
         });
         
         console.log('Salary attendance loaded:', Object.keys(attendanceData).length, 'by code,', Object.keys(attendanceByName).length, 'by name');
+        
+        // Log all attendance data for debugging late count mismatch
+        console.log('[SalarySheetAttendanceSummary] All attendance records:');
+        Object.entries(attendanceData).forEach(([code, data]: [string, any]) => {
+          if (data.lateDays > 0 || code.includes('0015')) {
+            console.log(`  ${code}: present=${data.presentDays}, late=${data.lateDays}, absent=${data.absentDays}, fridays=${data.fridayHolidays}`);
+          }
+        });
       } catch (err) {
         console.log('Salary attendance data not available, using defaults');
+      }
+
+      // Load employee policies for late/absent deduction calculations
+      let employeePolicies: any = {};
+      try {
+        const policies = await employeePolicyTaggingService.getAll();
+        policies.forEach((policy: any) => {
+          const key = policy.acNo || policy.no || policy.empNo;
+          if (key) {
+            employeePolicies[key] = policy;
+          }
+        });
+        console.log('Employee policies loaded:', Object.keys(employeePolicies).length);
+      } catch (err) {
+        console.log('Employee policies not available');
       }
 
       // Fetch full details with salary breakdown for each employee (with cache-busting)
@@ -192,15 +217,23 @@ export default function SalarySheetPage() {
       );
 
       const mergedData: SalarySheetEmployee[] = fullSalaryDetails.map((salaryInfo: EmployeeSalaryInformation, index: number) => {
-        const user = users.find((u: any) => u.emp_code === salaryInfo.empCode);
         
         // Try to match attendance by empCode first, then by name
         const empCode = (salaryInfo.empCode || '').toString().trim();
         const empName = (salaryInfo.empName || '').toString().trim().toLowerCase();
         
         let attendance = attendanceData[empCode];
+        let matchMethod = 'by empCode';
         if (!attendance && empName) {
           attendance = attendanceByName[empName];
+          matchMethod = 'by name';
+        }
+        
+        // Debug: Log attendance matching for all employees with 'E0015' or similar pattern
+        if (empCode.includes('E0015') || empCode.includes('0015')) {
+          console.log(`[AttendanceMatch] ${empCode}/${empName}: Found=${!!attendance}, Method=${matchMethod}, LateDays=${attendance?.lateDays}, Present=${attendance?.presentDays}, Absent=${attendance?.absentDays}`);
+          console.log(`[AttendanceKeys] Available empCodes:`, Object.keys(attendanceData).slice(0, 10));
+          console.log(`[AttendanceKeys] Available names:`, Object.keys(attendanceByName).slice(0, 10));
         }
         
         // Default values if no attendance data found
@@ -216,7 +249,7 @@ export default function SalarySheetPage() {
           };
           if (index === 0) console.log('No attendance match for:', empCode, empName);
         } else {
-          if (index === 0) console.log('Attendance matched for:', empCode, 'Present:', attendance.presentDays, 'Absent:', attendance.absentDays);
+          if (index === 0 || empCode.includes('0015')) console.log('Attendance matched for:', empCode, 'Method:', matchMethod, 'Present:', attendance.presentDays, 'Late:', attendance.lateDays, 'Absent:', attendance.absentDays);
         }
         
         // Get raw salary breakdown from employee salary info
@@ -226,12 +259,12 @@ export default function SalarySheetPage() {
         // Additions: Attendance Bonus, Incentive, Performance Bonus, and other positive amounts
         // Deductions: Provident Fund, Advance, Stamp, Tax, AIT, and negative amounts
         const additionHeads = ['Attendance Bonus', 'Incentive', 'Performance Bonus', 'Bonus'];
-        const deductionHeads = ['Provident Fund', 'Advance', 'Stamp', 'Tax', 'AIT', 'Punishment Amount', 'Transport Deduction', 'Lunch Contribution'];
+        const deductionHeads = ['Provident Fund', 'Advance', 'Stamp', 'Tax', 'AIT', 'Punishment Amount', 'Transport Deduction', 'Lunch Contribution', 'Late', 'Late Deduction', 'Absence', 'Absent'];
 
         const additions = breakdown.filter((b: SalaryBreakdown) => {
           const head = b.payrollHead || '';
           const amount = parseFloat(b.amount || '0');
-          return additionHeads.includes(head) || (amount > 0 && !deductionHeads.includes(head) && !['Basic', 'House Rent', 'Medical', 'Transport', 'Food'].includes(head));
+          return additionHeads.includes(head) || (amount > 0 && !deductionHeads.includes(head) && !['Basic', 'House Rent', 'Medical Allowance', 'Conveyance'].includes(head));
         });
 
         const deductions = breakdown.filter((b: SalaryBreakdown) => {
@@ -272,9 +305,8 @@ export default function SalarySheetPage() {
         // Get values ONLY from salary breakdown
         const basic = getAmount('basic');
         const houseRent = getAmount('house') || getAmount('rent');
-        const medical = getAmount('medical');
-        const transport = getAmount('transport');
-        const food = getAmount('food');
+        const medicalAllowance = getAmount('medical');
+        const conveyance = getAmount('transport') || getAmount('conveyance');
         
         // Gross ONLY from database grossSalary field
         const gross = parseFloat(salaryInfo.grossSalary || '0');
@@ -288,21 +320,62 @@ export default function SalarySheetPage() {
         const fridayHolidays = attendance.fridayHolidays;
         const weekends = attendance.weekends;
         
-        // Deductions from breakdown directly
-        const absentAmount = getAmount('absent');
-        const lateDeduction = getAmount('late');
+        // Get employee policy for late/absent deduction calculations
+        const policyKey = salaryInfo.acNo || salaryInfo.empCode || empCode;
+        const empPolicy = policyKey ? employeePolicies[policyKey] : null;
+        const lateDeductionPolicy = (empPolicy?.lateDeductionPolicyRule || '').toUpperCase().trim();
+        const absentDeductionPolicy = (empPolicy?.absentDeductionPolicyRule || '').toUpperCase().trim().replace(/ /g, '_');
+        
+        if (index === 0) console.log(`Policies for ${empCode}: Late='${lateDeductionPolicy}', Absent='${absentDeductionPolicy}'`);
+        
+        // STEP 1: Calculate Late Deduction
+        // Late Deduction Policy: APPLICABLE = 6 late days = 1 absent day
+        //                        NOT_APPLICABLE or empty = no late deduction
+        let lateAbsentDays = 0; // Converted late days to absent days (6 late = 1 absent)
+        let lateDeduction = 0;
+        
+        if (lateDeductionPolicy === 'APPLICABLE' && lateDays > 0) {
+          // 6 late days = 1 absent day
+          lateAbsentDays = Math.floor(lateDays / 6);
+          if (index === 0) console.log(`Late deduction APPLICABLE: ${lateDays} late days = ${lateAbsentDays} absent days`);
+        } else {
+          if (index === 0) console.log(`Late deduction NOT APPLICABLE or no late days`);
+        }
+        
+        // STEP 2: Calculate Absent Deduction
+        // Absent Deduction Policy: ON_BASIC = (basic / daysInMonth) * totalAbsent
+        //                          ON_GROSS = (gross / daysInMonth) * totalAbsent
+        //                          N/A or empty = no absent deduction
+        let absentAmount = 0;
+        const totalAbsentDays = absentDays + lateAbsentDays;
+        
+        if (absentDeductionPolicy === 'ON_BASIC' && totalAbsentDays > 0 && daysInMonth > 0 && basic > 0) {
+          const perDayBasic = basic / daysInMonth;
+          absentAmount = Math.round(perDayBasic * totalAbsentDays);
+          lateDeduction = Math.round(perDayBasic * lateAbsentDays); // Late portion of deduction
+          if (index === 0) console.log(`Absent deduction ON_BASIC: ${totalAbsentDays} days × ${perDayBasic.toFixed(2)} = ${absentAmount} (Late portion: ${lateDeduction})`);
+        } else if (absentDeductionPolicy === 'ON_GROSS' && totalAbsentDays > 0 && daysInMonth > 0 && gross > 0) {
+          const perDayGross = gross / daysInMonth;
+          absentAmount = Math.round(perDayGross * totalAbsentDays);
+          lateDeduction = Math.round(perDayGross * lateAbsentDays); // Late portion of deduction
+          if (index === 0) console.log(`Absent deduction ON_GROSS: ${totalAbsentDays} days × ${perDayGross.toFixed(2)} = ${absentAmount} (Late portion: ${lateDeduction})`);
+        } else {
+          if (index === 0) console.log(`Absent deduction N/A or conditions not met: policy='${absentDeductionPolicy}', absent=${absentDays}, lateAbsent=${lateAbsentDays}`);
+        }
+        
+        // Get other deductions from breakdown
         const leaveAmount = getAmount('leave') || 0;
         
-        // Total deductions from breakdown (sum of absolute values for display)
-        const totalDeduction = deductions.reduce((sum: number, d: SalaryBreakdown) => sum + Math.abs(parseFloat(d.amount || '0')), 0);
+        // Total deductions: payroll head deductions + policy-based absent/late deductions
+        const payrollDeductions = deductions.reduce((sum: number, d: SalaryBreakdown) => sum + Math.abs(parseFloat(d.amount || '0')), 0);
+        const totalDeduction = payrollDeductions + absentAmount; // absentAmount already includes late portion
 
-        // Net pay from database (matches employee salary information Net Payable)
-        // This already includes: Gross + Additions - Deductions
-        const netPay = parseFloat(salaryInfo.netPayable || '0') || (gross - totalDeduction);
+        // Net Payable = Gross - Total Late Deduction
+        // This is the final amount after all deductions
+        const netPayable = gross - totalDeduction;
 
-        // Final Payable = Net Pay (no OT, no double subtraction of deductions)
-        // Note: advance, tax, stamp are already included in netPay from database
-        const netPayable = netPay;
+        // Net Pay (for display purposes, same as netPayable now)
+        const netPay = netPayable;
 
         // Get deduction amounts for display purposes (already included in netPay)
         const advance = getAmount('advance');
@@ -315,22 +388,36 @@ export default function SalarySheetPage() {
         const inBank = bankInfo ? parseFloat(bankInfo.salaryAmount || '0') : 0;
         const inCash = netPayable - inBank;
 
+        // Save calculated deductions and net_payable to database (fire and forget, don't block UI)
+        // net_payable = Gross - Total Late Deduction
+        if (empCode) {
+          employeeSalaryInformationService.updateDeductions({
+            empCode: salaryInfo.empCode || empCode,
+            absentAmount: absentAmount,
+            lateDeduct: lateDeduction,
+            totalDeductions: totalDeduction,
+            finalPayable: netPayable  // This saves to net_payable column in database
+          }).catch((err: any) => {
+            console.log('Failed to save deductions for', empCode, err);
+          });
+        }
         
         return {
-          empId: salaryInfo.empId,
-          empCode: salaryInfo.empCode,
-          empName: salaryInfo.empName || user?.full_name_english || '-',
-          designation: salaryInfo.designation || user?.designation || '-',
-          joinDate: user?.joining_date || '-',
+          // CSV 4 columns - mapped directly from backend join
+          empNo: salaryInfo.empNo || '-',
+          acNo: salaryInfo.acNo || '-',
+          no: salaryInfo.no || salaryInfo.empCode || '-',
+          name: salaryInfo.name || salaryInfo.empName || '-',
+          designation: salaryInfo.designation || '-',
+          joinDate: salaryInfo.joinDate || '-',
           grade: salaryInfo.sGrade || '-',
           resignDate: '-',
-          acNumber: user?.ac_no || '-',
           salary: {
             basic: basic,
             houseRent: houseRent,
-            medical: medical,
-            transport: transport,
-            food: food,
+            medical: medicalAllowance,
+            transport: conveyance,
+            conveyance: conveyance,
             gross: gross,
           },
           attendance: {
@@ -373,8 +460,7 @@ export default function SalarySheetPage() {
       const searchTerm = currentParams.search || '';
       const filteredData = searchTerm
         ? mergedData.filter((emp: SalarySheetEmployee) =>
-            emp.empName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            emp.empCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             emp.designation.toLowerCase().includes(searchTerm.toLowerCase())
           )
         : mergedData;
@@ -396,7 +482,7 @@ export default function SalarySheetPage() {
         totalHouseRent: acc.totalHouseRent + emp.salary.houseRent,
         totalMedical: acc.totalMedical + emp.salary.medical,
         totalTransport: acc.totalTransport + emp.salary.transport,
-        totalFood: acc.totalFood + emp.salary.food,
+        totalConveyance: acc.totalConveyance + emp.salary.conveyance,
         totalGross: acc.totalGross + emp.salary.gross,
         totalAbsent: acc.totalAbsent + emp.deduction.absentAmount,
         totalDeduction: acc.totalDeduction + emp.deduction.totalDeduction,
@@ -408,18 +494,20 @@ export default function SalarySheetPage() {
       }),
       {
         totalEmployees: 0, totalBasic: 0, totalHouseRent: 0, totalMedical: 0,
-        totalTransport: 0, totalFood: 0, totalGross: 0, totalAbsent: 0,
+        totalTransport: 0, totalConveyance: 0, totalGross: 0, totalAbsent: 0,
         totalDeduction: 0, totalAdditions: 0, totalNetPay: 0, totalNetPayable: 0,
         totalInBank: 0, totalInCash: 0,
       }
     );
   }, [salaryData]);
 
-  const monthDisplay = useMemo(() => {
-    const [year, month] = selectedMonth.split('-');
-    const date = new Date(parseInt(year), parseInt(month) - 1);
-    return date.toLocaleString('default', { month: 'long', year: 'numeric' });
-  }, [selectedMonth]);
+  const dateRangeDisplay = useMemo(() => {
+    const start = new Date(fromDate);
+    const end = new Date(toDate);
+    const startStr = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const endStr = end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return `${startStr} - ${endStr}`;
+  }, [fromDate, toDate]);
 
   if (loading) {
     return (
@@ -439,19 +527,29 @@ export default function SalarySheetPage() {
       <div className="top-bar mb-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
         <div>
           <h4 className="mb-1 fw-bold">Salary Sheet</h4>
-          <p className="text-muted mb-0 small">Employee salary report for {monthDisplay}</p>
+          <p className="text-muted mb-0 small">Employee salary report for {dateRangeDisplay}</p>
         </div>
         <div className="d-flex gap-2 align-items-center flex-wrap">
           <div className="d-flex align-items-center gap-2">
-            <label htmlFor="monthSelect" className="form-label mb-0 text-muted small">Month:</label>
+            <label htmlFor="fromDate" className="form-label mb-0 text-muted small">From:</label>
             <input
-              id="monthSelect"
-              type="month"
+              id="fromDate"
+              type="date"
               className="form-control"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              style={{ width: '150px' }}
-              title="Select month for salary sheet"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              style={{ width: '140px' }}
+              title="Start date for salary sheet"
+            />
+            <label htmlFor="toDate" className="form-label mb-0 text-muted small">To:</label>
+            <input
+              id="toDate"
+              type="date"
+              className="form-control"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              style={{ width: '140px' }}
+              title="End date for salary sheet"
             />
           </div>
           <SearchBar params={currentParams} />
@@ -487,7 +585,7 @@ export default function SalarySheetPage() {
           <div className="text-center mb-3">
             <h3 className="fw-bold mb-1">Skyview Online LTD</h3>
             <p className="mb-0 small">153/1, Shahid Faroque Rd, Dhaka 1204</p>
-            <h5 className="fw-bold mt-2">Salary Sheet For The Month of {monthDisplay} - {selectedMonth.split('-')[0]}</h5>
+            <h5 className="fw-bold mt-2">Salary Sheet For The Period {dateRangeDisplay}</h5>
           </div>
 
           {/* Main Salary Sheet Table - Reference Format */}
@@ -512,13 +610,13 @@ export default function SalarySheetPage() {
                 {/* Header Row 2 - Sub Sections with Vertical Text */}
                 <tr style={{ backgroundColor: '#f0f0f0' }}>
                   {/* General Info - Row 2 */}
-                  <th rowSpan={2} className="v-header"><span>ID Card</span></th>
+                  <th rowSpan={2} className="v-header"><span>AC-No.</span></th>
                   <th rowSpan={2} className="v-header"><span>Join Date</span></th>
                   <th rowSpan={2} className="v-header"><span>Resign Date</span></th>
                   <th rowSpan={2} className="v-header"><span>Grade</span></th>
-                  <th rowSpan={2} style={{ width: '320px', minWidth: '320px', height: '60px', border: '1px solid #000', padding: '2px', background: '#f0f0f0', verticalAlign: 'middle' }}><span style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)', display: 'block', whiteSpace: 'nowrap', fontSize: '8px', fontWeight: 600, lineHeight: 1, textAlign: 'center' }}>Employee Name</span></th>
+                  <th rowSpan={2} style={{ width: '320px', minWidth: '320px', height: '60px', border: '1px solid #000', padding: '2px', background: '#f0f0f0', verticalAlign: 'middle' }}><span style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)', display: 'block', whiteSpace: 'nowrap', fontSize: '8px', fontWeight: 600, lineHeight: 1, textAlign: 'center' }}>Name</span></th>
                   <th rowSpan={2} className="v-header"><span>Designation</span></th>
-                  <th rowSpan={2} className="v-header"><span>A/C Number</span></th>
+                  <th rowSpan={2} className="v-header"><span>Emp No.</span></th>
                   {/* Salary - Row 2 */}
                   <th rowSpan={2} className="v-header"><span>Basic</span></th>
                   <th rowSpan={2} className="v-header"><span>House Rent</span></th>
@@ -558,22 +656,22 @@ export default function SalarySheetPage() {
               </thead>
               <tbody>
                 {salaryData.map((emp, index) => (
-                  <tr key={emp.empId} style={{ height: '26px' }}>
+                  <tr key={emp.acNo} style={{ height: '26px' }}>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{index + 1}</td>
                     {/* General Info */}
-                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.empCode}</td>
+                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.acNo}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.joinDate}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.resignDate || '-'}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.grade}</td>
-                    <td style={{ width: '320px', border: '1px solid #000', padding: '2px', textAlign: 'left', fontSize: '8px', wordWrap: 'break-word', overflow: 'visible' }}>{emp.empName}</td>
+                    <td style={{ width: '320px', border: '1px solid #000', padding: '2px', textAlign: 'left', fontSize: '8px', wordWrap: 'break-word', overflow: 'visible' }}>{emp.name}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'left', fontSize: '8px' }}>{emp.designation}</td>
-                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.acNumber}</td>
+                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.empNo}</td>
                     {/* Salary Structure */}
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.basic > 0 ? emp.salary.basic.toLocaleString() : '-'}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.houseRent > 0 ? emp.salary.houseRent.toLocaleString() : '-'}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.medical > 0 ? emp.salary.medical.toLocaleString() : '-'}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.transport > 0 ? emp.salary.transport.toLocaleString() : '-'}</td>
-                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.food > 0 ? emp.salary.food.toLocaleString() : '-'}</td>
+                    <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace' }}>{emp.salary.conveyance > 0 ? emp.salary.conveyance.toLocaleString() : '-'}</td>
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'right', fontSize: '8px', fontFamily: 'monospace', fontWeight: 'bold', backgroundColor: '#f0f0f0' }}>{emp.salary.gross > 0 ? emp.salary.gross.toLocaleString() : '-'}</td>
                     {/* Attendance */}
                     <td style={{ border: '1px solid #000', padding: '2px', textAlign: 'center', fontSize: '8px' }}>{emp.attendance.daysInMonth}</td>
@@ -616,7 +714,7 @@ export default function SalarySheetPage() {
                   <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalHouseRent > 0 ? totals.totalHouseRent.toLocaleString() : '-'}</td>
                   <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalMedical > 0 ? totals.totalMedical.toLocaleString() : '-'}</td>
                   <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalTransport > 0 ? totals.totalTransport.toLocaleString() : '-'}</td>
-                  <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalFood > 0 ? totals.totalFood.toLocaleString() : '-'}</td>
+                  <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalConveyance > 0 ? totals.totalConveyance.toLocaleString() : '-'}</td>
                   <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace', backgroundColor: '#c0c0c0' }}>{totals.totalGross > 0 ? totals.totalGross.toLocaleString() : '-'}</td>
                   <td colSpan={15} style={{ border: '1px solid #000', padding: '3px' }}></td>
                   <td style={{ border: '1px solid #000', padding: '3px', fontSize: '8px', fontWeight: 'bold', textAlign: 'right', fontFamily: 'monospace', color: '#8b0000' }}>{totals.totalAbsent > 0 ? totals.totalAbsent.toLocaleString() : '-'}</td>

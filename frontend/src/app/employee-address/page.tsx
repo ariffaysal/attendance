@@ -79,14 +79,24 @@ export default function EmployeeAddressPage() {
     if (!confirm('Are you sure you want to delete the address record for this employee?')) return;
 
     try {
-      const record = await employeeAddressService.getByEmpCode(empCode);
+      // First try to find by empCode
+      let record = null;
+      try {
+        record = await employeeAddressService.getByEmpCode(empCode);
+      } catch (e) {
+        // If not found by empCode, try finding in the loaded addresses
+        record = addresses.find(a => a.empCode === empCode);
+      }
+      
       if (record && record.id) {
         await employeeAddressService.delete(record.id);
         await loadAddresses();
+      } else {
+        alert('Could not find address record to delete. Please refresh the page.');
       }
     } catch (err: any) {
       console.error('Failed to delete address:', err);
-      alert('Failed to delete address: ' + err.message);
+      alert('Failed to delete address: ' + (err.response?.data?.message || err.message));
     }
   }
 
@@ -183,10 +193,17 @@ export default function EmployeeAddressPage() {
                       <div className="btn-group">
                         <Link
                           href={`/employee-address/emp/${emp.empCode}`}
-                          className="btn btn-sm btn-outline-primary"
-                          title="View Address Details"
+                          className="btn btn-sm btn-outline-info"
+                          title="View Details"
                         >
                           <i className="fas fa-eye"></i>
+                        </Link>
+                        <Link
+                          href={`/employee-address/${emp.firstRecordId}`}
+                          className="btn btn-sm btn-outline-primary"
+                          title="Edit Address"
+                        >
+                          <i className="fas fa-edit"></i>
                         </Link>
                         <button
                           className="btn btn-sm btn-outline-danger"

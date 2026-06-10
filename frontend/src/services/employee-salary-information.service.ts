@@ -2,9 +2,16 @@ import { api, unwrapResponse } from './api';
 import { EmployeeSalaryInformation, CreateEmployeeSalaryInformationData, UpdateEmployeeSalaryInformationData } from '@/types/employee-salary-information';
 
 export const employeeSalaryInformationService = {
-  async getAll(search?: string): Promise<EmployeeSalaryInformation[]> {
-    const params = search ? { search } : {};
+  async getAll(search?: string, searchType?: 'name' | 'acc_no'): Promise<EmployeeSalaryInformation[]> {
+    const params: any = {};
+    if (search) params.search = search;
+    if (searchType) params.searchType = searchType;
     const response = await api.get('/employee-salary-information', { params });
+    return unwrapResponse(response);
+  },
+
+  async getByACNo(acNo: string): Promise<EmployeeSalaryInformation> {
+    const response = await api.get(`/employee-salary-information/by-acno/${acNo}`);
     return unwrapResponse(response);
   },
 
@@ -30,5 +37,16 @@ export const employeeSalaryInformationService = {
 
   async delete(id: number): Promise<void> {
     await api.delete(`/employee-salary-information/${id}`);
+  },
+
+  async updateDeductions(deductions: {
+    empCode: string;
+    absentAmount?: number;
+    lateDeduct?: number;
+    totalDeductions?: number;
+    finalPayable?: number;
+  }): Promise<any> {
+    const response = await api.post('/employee-salary-information/update-deductions', deductions);
+    return unwrapResponse(response);
   },
 };

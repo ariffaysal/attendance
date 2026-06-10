@@ -1,11 +1,17 @@
--- Employee Addresses Table (Present & Permanent)
--- Run this in phpMyAdmin or MySQL CLI
+-- employee-addresses.sql
+-- Employee present and permanent addresses
+-- Primary identity: AC-No. (all 4 columns stored, AC-No. is the lookup key)
 
 CREATE TABLE IF NOT EXISTS employee_addresses (
     id INT AUTO_INCREMENT PRIMARY KEY,
     
-    -- Employee Identification
-    emp_code VARCHAR(50) NOT NULL,
+    -- 4 Identity Columns (all stored for display, AC-No. is the lookup key)
+    `Emp No.` VARCHAR(50) NOT NULL DEFAULT '',
+    `AC-No.` VARCHAR(50) NOT NULL,
+    `No.` VARCHAR(50) NOT NULL DEFAULT '',
+    `Name` VARCHAR(200) NOT NULL DEFAULT '',
+    
+    -- Additional info
     category VARCHAR(50),
     company VARCHAR(100),
     location VARCHAR(100),
@@ -44,5 +50,10 @@ CREATE TABLE IF NOT EXISTS employee_addresses (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
-    UNIQUE KEY unique_emp_code (emp_code)
+    -- Indexes
+    UNIQUE KEY unique_ac_no (`AC-No.`),
+    INDEX idx_ac_no (`AC-No.`),
+    INDEX idx_emp_no (`Emp No.`),
+    INDEX idx_no (`No.`),
+    INDEX idx_name (`Name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

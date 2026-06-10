@@ -1,8 +1,15 @@
+-- employee-policy-tagging.sql
+-- Maps employees to attendance/salary policies
+-- Primary identity: AC-No. (only 2 columns stored: AC-No. and Name)
+
 CREATE TABLE IF NOT EXISTS employee_policy_tagging (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  emp_code VARCHAR(50) NOT NULL,
-  emp_id VARCHAR(50) NULL,
-  emp_name VARCHAR(100) NULL,
+  
+  -- 2 Identity Columns (AC-No. is the lookup key)
+  `AC-No.` VARCHAR(50) NOT NULL,
+  `Name` VARCHAR(200) NOT NULL DEFAULT '',
+  
+  -- Additional employee info
   category VARCHAR(100) NULL,
   company VARCHAR(100) NULL,
   location VARCHAR(100) NULL,
@@ -12,7 +19,7 @@ CREATE TABLE IF NOT EXISTS employee_policy_tagging (
   subsection VARCHAR(100) NULL,
   designation VARCHAR(100) NULL,
   
-  -- Policy Fields
+  -- Policy Fields (16 policies)
   overtime_policy_rule VARCHAR(50) NULL,
   overtime_policy_date DATE NULL,
   holiday_incentive_rule VARCHAR(50) NULL,
@@ -43,11 +50,14 @@ CREATE TABLE IF NOT EXISTS employee_policy_tagging (
   early_out_deduction_policy_date DATE NULL,
   service_benefit_policy_rule VARCHAR(50) NULL,
   service_benefit_policy_date DATE NULL,
-  hd_deduct_rule_rule VARCHAR(50) NULL,
-  hd_deduct_rule_date DATE NULL,
+  hd_deduct_rule_policy_rule VARCHAR(50) NULL,
+  hd_deduct_rule_policy_date DATE NULL,
   
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_emp_code (emp_code),
-  UNIQUE KEY unique_emp_code (emp_code)
+  
+  -- Indexes
+  UNIQUE KEY unique_ac_no (`AC-No.`),
+  INDEX idx_ac_no (`AC-No.`),
+  INDEX idx_name (`Name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,4 +1,5 @@
 import { api } from './api';
+import { Role } from './auth.service';
 
 export interface User {
   id: number;
@@ -6,6 +7,7 @@ export interface User {
   email: string;
   mobileNumber?: string;
   isActive: boolean;
+  role?: Role;
   lastLogin?: string;
   createdAt: string;
   updatedAt: string;
@@ -17,6 +19,7 @@ export interface CreateUserData {
   mobileNumber?: string;
   password: string;
   isActive?: boolean;
+  role?: Role;
 }
 
 export interface UpdateUserData {
@@ -25,6 +28,7 @@ export interface UpdateUserData {
   mobileNumber?: string;
   password?: string;
   isActive?: boolean;
+  role?: Role;
 }
 
 export interface ApiResponse<T = any> {

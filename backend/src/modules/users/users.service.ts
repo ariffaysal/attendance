@@ -18,7 +18,7 @@ export class UsersService {
 
   async findAll() {
     const [users] = await this.connection.execute(
-      'SELECT id, employee_id, email, mobile_number, is_active, last_login, created_at, updated_at FROM auth_users ORDER BY created_at DESC'
+      'SELECT id, employee_id, email, mobile_number, is_active, role, last_login, created_at, updated_at FROM auth_users ORDER BY created_at DESC'
     );
 
     return (users as any[]).map(user => ({
@@ -26,16 +26,16 @@ export class UsersService {
       employeeId: user.employee_id,
       email: user.email,
       mobileNumber: user.mobile_number,
-      isActive: user.is_active,
+      isActive: Boolean(user.is_active),
       lastLogin: user.last_login,
       createdAt: user.created_at,
-      updatedAt: user.updated_at,
+      role: user.role,
     }));
   }
 
   async findOne(id: number) {
     const [users] = await this.connection.execute(
-      'SELECT id, employee_id, email, mobile_number, is_active, last_login, created_at, updated_at FROM auth_users WHERE id = ?',
+      'SELECT id, employee_id, email, mobile_number, is_active, role, last_login, created_at, updated_at FROM auth_users WHERE id = ?',
       [id]
     );
 
@@ -50,7 +50,8 @@ export class UsersService {
       employeeId: user.employee_id,
       email: user.email,
       mobileNumber: user.mobile_number,
-      isActive: user.is_active,
+      isActive: Boolean(user.is_active),
+      role: user.role,
       lastLogin: user.last_login,
       createdAt: user.created_at,
       updatedAt: user.updated_at,
@@ -58,7 +59,7 @@ export class UsersService {
   }
 
   async create(createUserDto: CreateUserDto) {
-    const { employeeId, email, mobileNumber, password, isActive } = createUserDto;
+    const { employeeId, email, mobileNumber, password, isActive, role } = createUserDto;
 
     // Check if employee_id already exists
     const [existingEmployee] = await this.connection.execute(
@@ -85,8 +86,9 @@ export class UsersService {
 
     // Insert new user
     const [result] = await this.connection.execute(
-      'INSERT INTO auth_users (employee_id, email, mobile_number, password_hash, is_active) VALUES (?, ?, ?, ?, ?)',
-      [employeeId, email, mobileNumber || null, passwordHash, isActive !== false],
+      'INSERT INTO auth_users (employee_id, email, mobile_number, password_hash, is_active, role) VALUES (?, ?, ?, ?, ?, ?)',
+
+      [employeeId, email, mobileNumber || null, passwordHash, isActive !== false, role || null],
     );
 
     const insertId = (result as mysql.OkPacket).insertId;
@@ -99,7 +101,7 @@ export class UsersService {
   }
 
   async update(id: number, updateUserDto: UpdateUserDto) {
-    const { employeeId, email, mobileNumber, password, isActive } = updateUserDto;
+    const { employeeId, email, mobileNumber, password, isActive, role } = updateUserDto;
 
     // Check if user exists
     const [existingUsers] = await this.connection.execute(
@@ -164,6 +166,12 @@ export class UsersService {
     if (isActive !== undefined) {
       updates.push('is_active = ?');
       values.push(isActive);
+    }
+
+    // Handle role update (optional)
+    if (role !== undefined) {
+      updates.push('role = ?');
+      values.push(role);
     }
 
     if (updates.length === 0) {

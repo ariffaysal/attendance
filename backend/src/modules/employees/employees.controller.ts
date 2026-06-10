@@ -17,8 +17,8 @@ export class EmployeesController {
 
   @Get('search/suggestions')
   @ApiOperation({ summary: 'Get employee search suggestions for autocomplete' })
-  async getSearchSuggestions(@Query('q') query?: string, @Query('limit') limit?: number) {
-    return this.employeesService.getSearchSuggestions(query, limit || 10);
+  async getSearchSuggestions(@Query('q') query?: string, @Query('limit') limit?: number, @Query('searchType') searchType?: string) {
+    return this.employeesService.getSearchSuggestions(query, limit || 10, searchType);
   }
 
   @Get('validate/:empCode')
@@ -59,7 +59,7 @@ export class EmployeesController {
   @ApiBody({ type: UpdateEmployeeDto })
   async update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CreateEmployeeDto,
+    @Body() dto: UpdateEmployeeDto,
   ) {
     return this.employeesService.update(id, dto);
   }

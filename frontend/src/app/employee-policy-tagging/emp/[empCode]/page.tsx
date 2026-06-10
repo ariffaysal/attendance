@@ -27,9 +27,11 @@ const POLICY_LABELS: Record<string, string> = {
 
 interface PolicyRecord {
   id: number;
-  empCode: string;
-  empId: string;
-  empName: string;
+  // CSV 4 columns
+  empNo: string;       // `Emp No.` from CSV
+  acNo: string;        // `AC-No.` from CSV - PRIMARY key
+  no: string;          // `No.` from CSV
+  name: string;        // `Name` from CSV
   category: string;
   company: string;
   location: string;
@@ -44,23 +46,23 @@ interface PolicyRecord {
 export default function EmployeePolicyTaggingDetailPage() {
   const router = useRouter();
   const params = useParams();
-  const empCode = params.empCode as string;
+  const acNo = params.empCode as string; // URL param still called empCode for compatibility
   
   const [record, setRecord] = useState<PolicyRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (empCode) {
+    if (acNo) {
       loadPolicyRecord();
     }
-  }, [empCode]);
+  }, [acNo]);
 
   async function loadPolicyRecord() {
     setLoading(true);
     setError(null);
     try {
-      const data = await employeePolicyTaggingService.getByEmpCode(empCode);
+      const data = await employeePolicyTaggingService.getByACNo(acNo);
       setRecord(data);
     } catch (err: any) {
       console.error('Failed to load policy record:', err);
@@ -132,7 +134,7 @@ export default function EmployeePolicyTaggingDetailPage() {
         <div>
           <h4 className="mb-1 fw-bold">Employee Policy Tagging Details</h4>
           <p className="text-muted mb-0 small">
-            {record.empName} ({record.empCode})
+            {record.name} (AC-No.: {record.acNo})
           </p>
         </div>
         <div className="d-flex gap-2">
@@ -160,21 +162,25 @@ export default function EmployeePolicyTaggingDetailPage() {
       {/* Employee Information Card */}
       <div className="card mb-4">
         <div className="card-header bg-light">
-          <h5 className="mb-0">Employee Information</h5>
+          <h5 className="mb-0">Employee Information (CSV Data)</h5>
         </div>
         <div className="card-body">
           <div className="row g-3">
             <div className="col-md-3">
-              <label className="form-label text-muted">Emp Code</label>
-              <p className="fw-medium">{record.empCode}</p>
+              <label className="form-label text-muted">AC-No.</label>
+              <p className="fw-medium">{record.acNo}</p>
             </div>
             <div className="col-md-3">
-              <label className="form-label text-muted">Emp ID</label>
-              <p className="fw-medium">{record.empId || '-'}</p>
+              <label className="form-label text-muted">Emp No.</label>
+              <p className="fw-medium">{record.empNo || '-'}</p>
             </div>
             <div className="col-md-3">
-              <label className="form-label text-muted">Emp Name</label>
-              <p className="fw-medium">{record.empName || '-'}</p>
+              <label className="form-label text-muted">No.</label>
+              <p className="fw-medium">{record.no || '-'}</p>
+            </div>
+            <div className="col-md-3">
+              <label className="form-label text-muted">Name</label>
+              <p className="fw-medium">{record.name || '-'}</p>
             </div>
             <div className="col-md-3">
               <label className="form-label text-muted">Category</label>

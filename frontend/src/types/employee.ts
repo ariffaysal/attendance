@@ -1,10 +1,16 @@
 export interface Employee {
   id: number;
-  emp_code: string;
-  emp_id: string;
-  punch_card: string;
-  full_name_bangla: string;
-  full_name_english: string;
+  // CSV 4 Identity Columns (from csv_employees table - source of truth)
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV (like E0453)
+  name: string;     // `Name` from CSV
+  // Legacy fields (mapped from CSV columns for backward compatibility)
+  emp_code: string;  // Maps to `No.`
+  emp_id: string;    // Maps to `Emp No.`
+  punch_card: string; // Maps to `AC-No.`
+  full_name_bangla: string;  // Maps to `Name`
+  full_name_english: string; // Maps to `Name`
   fathers_name_bangla?: string;
   fathers_name?: string;
   mothers_name_bangla?: string;

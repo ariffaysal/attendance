@@ -1,6 +1,6 @@
 'use client';
 
-
+import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion';
 import {
@@ -57,44 +57,8 @@ function CustomCursor() {
     };
   }, []);
 
-  if (!isVisible) return null;
-
-  return (
-    <>
-      <motion.div
-        className="fixed w-4 h-4 bg-neon-blue rounded-full pointer-events-none z-[9999] mix-blend-difference"
-        style={{
-          left: position.x - 8,
-          top: position.y - 8,
-        }}
-        animate={{
-          scale: isHovering ? 2 : 1,
-        }}
-        transition={{
-          type: 'spring',
-          stiffness: 500,
-          damping: 28,
-          mass: 0.5,
-        }}
-      />
-      <motion.div
-        className="fixed w-8 h-8 border border-neon-blue/50 rounded-full pointer-events-none z-[9998]"
-        style={{
-          left: position.x - 16,
-          top: position.y - 16,
-        }}
-        animate={{
-          scale: isHovering ? 1.5 : 1,
-        }}
-        transition={{
-          type: 'spring',
-          stiffness: 150,
-          damping: 15,
-          mass: 0.8,
-        }}
-      />
-    </>
-  );
+  // DISABLED: May be blocking clicks
+  return null;
 }
 
 // Animated Grid Background
@@ -248,7 +212,8 @@ function PricingCard({
   features, 
   isPopular = false, 
   isYearly,
-  delay = 0 
+  delay = 0,
+  onSignIn
 }: { 
   name: string; 
   monthlyPrice: number; 
@@ -257,6 +222,7 @@ function PricingCard({
   isPopular?: boolean;
   isYearly: boolean;
   delay?: number;
+  onSignIn: () => void;
 }) {
   const price = isYearly ? yearlyPrice : monthlyPrice;
 
@@ -293,8 +259,8 @@ function PricingCard({
           </li>
         ))}
       </ul>
-      <Link
-        href="/login"
+      <button
+        onClick={onSignIn}
         className={`w-full py-3 rounded-xl font-semibold transition-all duration-300 text-center block ${
           isPopular
             ? 'bg-gradient-to-r from-neon-blue to-neon-purple text-white hover:shadow-lg hover:shadow-neon-blue/30'
@@ -302,18 +268,32 @@ function PricingCard({
         }`}
       >
         Sign In
-      </Link>
+      </button>
     </motion.div>
   );
 }
 
 // Main Page Component
 export default function SkyviewLanding() {
+  const router = useRouter();
   const [isYearly, setIsYearly] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { scrollYProgress } = useScroll();
   const heroY = useTransform(scrollYProgress, [0, 0.5], [0, -100]);
   const heroOpacity = useTransform(scrollYProgress, [0, 0.5], [1, 0]);
+
+  const navigateToLogin = () => {
+    console.log('Sign In clicked - navigating to /login');
+    router.push('/login');
+  };
+  
+  const handleSignInClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Button clicked at:', new Date().toISOString());
+    // Use direct navigation instead of router
+    window.location.href = '/login';
+  };
 
   const features = [
     {
@@ -400,12 +380,14 @@ export default function SkyviewLanding() {
             </div>
 
             <div className="hidden md:flex items-center gap-4">
-              <Link
-                href="/login"
-                className="px-4 py-2 bg-gradient-to-r from-neon-blue to-neon-purple rounded-lg text-sm font-semibold hover:shadow-lg hover:shadow-neon-blue/30 transition-all"
+              <button
+                type="button"
+                onClick={handleSignInClick}
+                style={{ position: 'relative', zIndex: 100 }}
+                className="px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg text-sm font-semibold hover:shadow-lg transition-all cursor-pointer"
               >
                 Sign In
-              </Link>
+              </button>
             </div>
 
             <button
@@ -496,13 +478,15 @@ export default function SkyviewLanding() {
             transition={{ duration: 0.8, delay: 0.8 }}
             className="flex flex-col sm:flex-row items-center justify-center gap-4"
           >
-            <Link
-              href="/login"
-              className="group px-8 py-4 bg-gradient-to-r from-neon-blue to-neon-purple rounded-xl font-semibold text-lg hover:shadow-lg hover:shadow-neon-blue/30 transition-all flex items-center gap-2 animate-pulse-neon"
+            <button
+              type="button"
+              onClick={handleSignInClick}
+              style={{ position: 'relative', zIndex: 100 }}
+              className="group px-8 py-4 bg-gradient-to-r from-blue-500 to-purple-600 rounded-xl font-semibold text-lg hover:shadow-lg transition-all flex items-center gap-2 cursor-pointer"
             >
               Sign In
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-            </Link>
+            </button>
             <Link
               href="#network"
               className="px-8 py-4 bg-white/5 border border-white/20 rounded-xl font-semibold text-lg hover:bg-white/10 transition-all flex items-center gap-2"
@@ -642,6 +626,7 @@ export default function SkyviewLanding() {
                 {...plan}
                 isYearly={isYearly}
                 delay={i * 0.1}
+                onSignIn={navigateToLogin}
               />
             ))}
           </div>

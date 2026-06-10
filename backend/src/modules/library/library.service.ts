@@ -124,7 +124,7 @@ export class LibraryService {
       const [rules] = await this.db.execute(
         `SELECT * FROM library_policy_rules 
          WHERE policy_id = ? 
-         ORDER BY priority ASC, rule_code ASC`,
+         ORDER BY rule_code ASC`,
         [id],
       );
       policy.rules = rules;
@@ -231,8 +231,8 @@ export class LibraryService {
         await this.db.execute(
           `INSERT INTO library_policy_rules 
            (policy_id, rule_code, rule_name, description, conditions, calculation_formula, 
-            is_active, priority, rule_type, condition_logic) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            is_active) 
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             newPolicyId,
             rule.rule_code,
@@ -241,9 +241,6 @@ export class LibraryService {
             rule.conditions,
             rule.calculation_formula,
             rule.is_active,
-            rule.priority || 100,
-            rule.rule_type || 'standard',
-            rule.condition_logic || 'AND',
           ],
         );
       }
@@ -315,7 +312,7 @@ export class LibraryService {
     const [rows] = await this.db.execute(
       `SELECT * FROM library_policy_rules 
        WHERE policy_id = ? 
-       ORDER BY priority ASC, rule_code ASC`,
+       ORDER BY rule_code ASC`,
       [policyId],
     );
     return rows;
@@ -335,8 +332,8 @@ export class LibraryService {
     const [result] = await this.db.execute(
       `INSERT INTO library_policy_rules 
        (policy_id, rule_code, rule_name, description, conditions, calculation_formula, 
-        is_active, priority, rule_type, condition_logic) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        is_active) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         policyId,
         data.rule_code,
@@ -345,9 +342,6 @@ export class LibraryService {
         data.conditions ? JSON.stringify(data.conditions) : null,
         data.calculation_formula || null,
         data.is_active !== false,
-        data.priority || 100,
-        data.rule_type || 'standard',
-        data.condition_logic || 'AND',
       ],
     );
     return { id: (result as any).insertId, policy_id: policyId, ...data };
@@ -405,18 +399,6 @@ export class LibraryService {
     if (data.calculation_formula !== undefined) {
       updates.push('calculation_formula = ?');
       values.push(data.calculation_formula || null);
-    }
-    if (data.priority !== undefined) {
-      updates.push('priority = ?');
-      values.push(data.priority);
-    }
-    if (data.rule_type !== undefined) {
-      updates.push('rule_type = ?');
-      values.push(data.rule_type);
-    }
-    if (data.condition_logic !== undefined) {
-      updates.push('condition_logic = ?');
-      values.push(data.condition_logic);
     }
 
     if (updates.length === 0) {
@@ -839,7 +821,8 @@ export class LibraryService {
         }
         successful++;
       } catch (error) {
-        failed.push({ emp_code: toEmpCode, error: error.message });
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        failed.push({ emp_code: toEmpCode, error: errorMessage });
       }
     }
     
@@ -912,8 +895,8 @@ export class LibraryService {
         await this.db.execute(
           `INSERT INTO library_policy_rules 
            (policy_id, rule_code, rule_name, description, conditions, calculation_formula, 
-            is_active, priority, rule_type, condition_logic) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            is_active) 
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             newPolicyId,
             rule.rule_code,
@@ -922,9 +905,6 @@ export class LibraryService {
             rule.conditions,
             rule.calculation_formula,
             rule.is_active,
-            rule.priority || 100,
-            rule.rule_type || 'standard',
-            rule.condition_logic || 'AND',
           ],
         );
       }
@@ -972,9 +952,9 @@ export class LibraryService {
     for (const rule of defaultRules) {
       await this.db.execute(
         `INSERT INTO library_policy_rules 
-         (policy_id, rule_code, rule_name, description, is_active, priority) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [policyId, rule.code, rule.name, rule.desc, true, 100],
+         (policy_id, rule_code, rule_name, description, is_active) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [policyId, rule.code, rule.name, rule.desc, true],
       );
     }
   }

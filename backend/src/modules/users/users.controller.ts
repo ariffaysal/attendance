@@ -2,6 +2,8 @@ import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards, HttpCode, H
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { Roles } from '../../common/decorators/roles.decorator';
+
 import { AuthGuard } from '../../common/guards/auth.guard';
 
 @Controller('users')
@@ -9,6 +11,7 @@ import { AuthGuard } from '../../common/guards/auth.guard';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  @Roles('admin')
   @Get()
   @HttpCode(HttpStatus.OK)
   async findAll() {
@@ -21,18 +24,21 @@ export class UsersController {
     return this.usersService.findOne(Number(id));
   }
 
+  @Roles('admin')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
   }
 
+  @Roles('admin')
   @Put(':id')
   @HttpCode(HttpStatus.OK)
   async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.usersService.update(Number(id), updateUserDto);
   }
 
+  @Roles('admin')
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(@Param('id') id: string) {

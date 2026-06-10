@@ -51,7 +51,7 @@ export default function EditEmployeeSalaryInformationPage() {
   const [otherDeductions, setOtherDeductions] = useState<{id: number, label: string, amount: string}[]>([]);
 
   const [salaryBreakdown, setSalaryBreakdown] = useState<SalaryBreakdown[]>([]);
-  const [basicMode, setBasicMode] = useState<'formula' | 'percentage'>('formula');
+  const [basicMode, setBasicMode] = useState<'formula' | 'percentage'>('percentage');
 
   // Dropdown selection states for quick add
   const [selectedAddition, setSelectedAddition] = useState('');
@@ -280,11 +280,6 @@ export default function EditEmployeeSalaryInformationPage() {
   };
 
   const handleUpdate = async () => {
-    if (!empCode.trim()) {
-      alert('Emp Code is required');
-      return;
-    }
-
     setSaving(true);
     try {
       await employeeSalaryInformationService.update(Number(id), {
@@ -392,48 +387,57 @@ export default function EditEmployeeSalaryInformationPage() {
       const FIXED_FOOD = 750;
       const totalFixed = FIXED_MEDICAL + FIXED_TRANSPORT + FIXED_FOOD;
 
-      // Calculate based on mode
+      // Percentage mode: Use new structure (Basic 50%, House Rent 30%, Medical Allowance 15%, Conveyance 5%)
+      // Formula mode: Use fixed amounts (450, 1250, 750) with (Gross - Fixed) / 1.5
       let basicAmount: number;
       let houseRentAmount: number;
+      let medicalAllowanceAmount: number;
+      let conveyanceAmount: number;
       let basicType: string;
       let houseRentType: string;
+      let medicalType: string;
+      let conveyanceType: string;
 
       if (basicMode === 'percentage') {
-        // Percentage mode: Basic = 50% of Gross, House Rent = balance
-        basicAmount = gross * 0.50;
-        houseRentAmount = gross - basicAmount - totalFixed;
+        // Percentage mode: Fixed structure
+        // Basic Salary (50%), House Rent (30%), Medical Allowance (15%), Conveyance (5%) = Total 100%
+        basicAmount = gross * 0.50; // 50%
+        houseRentAmount = gross * 0.30; // 30%
+        medicalAllowanceAmount = gross * 0.15; // 15%
+        conveyanceAmount = gross * 0.05; // 5%
         basicType = 'Percentage';
-        houseRentType = 'Calculated';
-
-        if (houseRentAmount < 0) {
-          alert(`Warning: Gross salary (${gross}) is too low for 50% Basic + Fixed allowances (${totalFixed}). House Rent would be negative.`);
-        }
+        houseRentType = 'Percentage';
+        medicalType = 'Percentage';
+        conveyanceType = 'Percentage';
       } else {
-        // Formula mode: Auto-balanced
-        const remaining = gross - totalFixed;
-        basicAmount = remaining / 1.5;
-        houseRentAmount = remaining / 3;
+        // Formula mode: Keep original fixed amounts
+        basicAmount = (gross - totalFixed) / 1.5;
+        houseRentAmount = (gross - totalFixed) / 3;
+        medicalAllowanceAmount = FIXED_MEDICAL; // 450
+        conveyanceAmount = FIXED_TRANSPORT + FIXED_FOOD; // 1250 + 750 = 2000
         basicType = 'Formula';
         houseRentType = 'Formula';
+        medicalType = 'Fixed';
+        conveyanceType = 'Fixed';
       }
 
       // Calculate percentages based on gross
       const basicPct = ((basicAmount / gross) * 100).toFixed(2);
       const houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
-      const medicalPct = ((FIXED_MEDICAL / gross) * 100).toFixed(2);
-      const transportPct = ((FIXED_TRANSPORT / gross) * 100).toFixed(2);
-      const foodPct = ((FIXED_FOOD / gross) * 100).toFixed(2);
+      const medicalAllowancePct = ((medicalAllowanceAmount / gross) * 100).toFixed(2);
+      const conveyancePct = ((conveyanceAmount / gross) * 100).toFixed(2);
 
       const updatedBreakdown = salaryBreakdown.map((row) => {
-        // Enforce fixed values for Medical, Transport, Food
-        if (row.payrollHead === 'Medical') {
-          return { ...row, type: 'Fixed', amount: FIXED_MEDICAL.toFixed(2), percentageFormula: medicalPct };
+        // Apply values based on payroll head
+        if (row.payrollHead === 'Medical Allowance') {
+          const amount = basicMode === 'percentage' ? medicalAllowanceAmount.toFixed(2) : FIXED_MEDICAL.toFixed(2);
+          const pct = basicMode === 'percentage' ? '15' : medicalAllowancePct;
+          return { ...row, type: medicalType, amount, percentageFormula: pct };
         }
-        if (row.payrollHead === 'Transport') {
-          return { ...row, type: 'Fixed', amount: FIXED_TRANSPORT.toFixed(2), percentageFormula: transportPct };
-        }
-        if (row.payrollHead === 'Food') {
-          return { ...row, type: 'Fixed', amount: FIXED_FOOD.toFixed(2), percentageFormula: foodPct };
+        if (row.payrollHead === 'Conveyance') {
+          const amount = basicMode === 'percentage' ? conveyanceAmount.toFixed(2) : (FIXED_TRANSPORT + FIXED_FOOD).toFixed(2);
+          const pct = basicMode === 'percentage' ? '5' : conveyancePct;
+          return { ...row, type: conveyanceType, amount, percentageFormula: pct };
         }
 
         // Recalculate Basic based on mode
@@ -457,48 +461,58 @@ export default function EditEmployeeSalaryInformationPage() {
       const FIXED_FOOD = 750;
       const totalFixed = FIXED_MEDICAL + FIXED_TRANSPORT + FIXED_FOOD;
 
-      // Calculate based on mode
+      // Percentage mode: Use new structure (Basic 50%, House Rent 30%, Medical Allowance 15%, Conveyance 5%)
+      // Formula mode: Use fixed amounts (450, 1250, 750) with (Gross - Fixed) / 1.5
       let basicAmount: number;
       let houseRentAmount: number;
+      let medicalAllowanceAmount: number;
+      let conveyanceAmount: number;
       let basicType: string;
       let houseRentType: string;
+      let medicalType: string;
+      let conveyanceType: string;
       let basicPct: string;
       let houseRentPct: string;
+      let medicalAllowancePct: string;
+      let conveyancePct: string;
 
       if (basicMode === 'percentage') {
-        // Percentage mode: Basic = 50% of Gross, House Rent = balance
-        basicAmount = gross * 0.50;
-        houseRentAmount = gross - basicAmount - totalFixed;
+        // Percentage mode: Fixed structure
+        // Basic Salary (50%), House Rent (30%), Medical Allowance (15%), Conveyance (5%) = Total 100%
+        basicAmount = gross * 0.50; // 50%
+        houseRentAmount = gross * 0.30; // 30%
+        medicalAllowanceAmount = gross * 0.15; // 15%
+        conveyanceAmount = gross * 0.05; // 5%
         basicType = 'Percentage';
-        houseRentType = 'Calculated';
+        houseRentType = 'Percentage';
+        medicalType = 'Percentage';
+        conveyanceType = 'Percentage';
         basicPct = '50';
-        houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
-
-        if (houseRentAmount < 0) {
-          alert(`Warning: Gross salary (${gross}) is too low for 50% Basic + Fixed allowances (${totalFixed}).`);
-        }
+        houseRentPct = '30';
+        medicalAllowancePct = '15';
+        conveyancePct = '5';
       } else {
-        // Formula mode: Auto-balanced
-        const remaining = gross - totalFixed;
-        basicAmount = remaining / 1.5;
-        houseRentAmount = remaining / 3;
+        // Formula mode: Keep original fixed amounts
+        basicAmount = (gross - totalFixed) / 1.5;
+        houseRentAmount = (gross - totalFixed) / 3;
+        medicalAllowanceAmount = FIXED_MEDICAL; // 450
+        conveyanceAmount = FIXED_TRANSPORT + FIXED_FOOD; // 1250 + 750 = 2000
         basicType = 'Formula';
         houseRentType = 'Formula';
+        medicalType = 'Fixed';
+        conveyanceType = 'Fixed';
         basicPct = ((basicAmount / gross) * 100).toFixed(2);
         houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
+        medicalAllowancePct = ((medicalAllowanceAmount / gross) * 100).toFixed(2);
+        conveyancePct = ((conveyanceAmount / gross) * 100).toFixed(2);
       }
 
-      const medicalPct = ((FIXED_MEDICAL / gross) * 100).toFixed(2);
-      const transportPct = ((FIXED_TRANSPORT / gross) * 100).toFixed(2);
-      const foodPct = ((FIXED_FOOD / gross) * 100).toFixed(2);
-
-      // Create new default structure with fixed values and calculated percentages
+      // Create new default structure with values based on selected mode
       const baseStructure: SalaryBreakdown[] = [
         { id: 1, payrollHead: 'Basic', type: basicType, percentageFormula: basicPct, baseHead: 'Gross Salary', amount: basicAmount.toFixed(2), sequence: '1' },
         { id: 2, payrollHead: 'House Rent', type: houseRentType, percentageFormula: houseRentPct, baseHead: 'Gross Salary', amount: houseRentAmount.toFixed(2), sequence: '2' },
-        { id: 3, payrollHead: 'Medical', type: 'Fixed', percentageFormula: medicalPct, baseHead: 'Gross Salary', amount: FIXED_MEDICAL.toFixed(2), sequence: '3' },
-        { id: 4, payrollHead: 'Transport', type: 'Fixed', percentageFormula: transportPct, baseHead: 'Gross Salary', amount: FIXED_TRANSPORT.toFixed(2), sequence: '4' },
-        { id: 5, payrollHead: 'Food', type: 'Fixed', percentageFormula: foodPct, baseHead: 'Gross Salary', amount: FIXED_FOOD.toFixed(2), sequence: '5' },
+        { id: 3, payrollHead: 'Medical Allowance', type: medicalType, percentageFormula: medicalAllowancePct, baseHead: 'Gross Salary', amount: medicalAllowanceAmount.toFixed(2), sequence: '3' },
+        { id: 4, payrollHead: 'Conveyance', type: conveyanceType, percentageFormula: conveyancePct, baseHead: 'Gross Salary', amount: conveyanceAmount.toFixed(2), sequence: '4' },
       ];
 
       let nextId = baseStructure.length + 1;
@@ -657,11 +671,12 @@ export default function EditEmployeeSalaryInformationPage() {
   const getTotalWithAdditions = () => {
     const base = parseFloat(grossSalary || '0');
     // Calculate additions from salaryBreakdown table rows
+    const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
     const additionsFromTable = salaryBreakdown.reduce((sum, row) => {
       const amount = parseFloat(row.amount || '0');
+      const payrollHead = (row.payrollHead || '').trim();
       // Additions are positive amounts that are not basic salary components
-      const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
-      if (amount > 0 && !basicComponents.includes(row.payrollHead)) {
+      if (amount > 0 && !basicComponents.includes(payrollHead)) {
         return sum + amount;
       }
       return sum;
@@ -682,10 +697,11 @@ export default function EditEmployeeSalaryInformationPage() {
 
   const getAdditionsOnly = () => {
     // Return just the additions amount (without base gross)
+    const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
     return salaryBreakdown.reduce((sum, row) => {
       const amount = parseFloat(row.amount || '0');
-      const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
-      if (amount > 0 && !basicComponents.includes(row.payrollHead)) {
+      const payrollHead = (row.payrollHead || '').trim();
+      if (amount > 0 && !basicComponents.includes(payrollHead)) {
         return sum + amount;
       }
       return sum;
@@ -700,22 +716,25 @@ export default function EditEmployeeSalaryInformationPage() {
 
   // Helper functions for quick add
   const quickAddRow = (payrollHead: string, amount: string, isDeduction: boolean = false) => {
-    const newId = salaryBreakdown.length > 0 ? Math.max(...salaryBreakdown.map((b) => b.id || 0)) + 1 : 1;
-    const newSequence = (salaryBreakdown.length + 1).toString();
     const finalAmount = isDeduction ? (-parseFloat(amount || '0')).toFixed(2) : parseFloat(amount || '0').toFixed(2);
 
-    setSalaryBreakdown((prev) => [
-      ...prev,
-      {
-        id: newId,
-        payrollHead,
-        type: 'Fixed',
-        percentageFormula: '',
-        baseHead: 'Gross Salary',
-        amount: finalAmount,
-        sequence: newSequence,
-      },
-    ]);
+    setSalaryBreakdown((prev) => {
+      const newId = prev.length > 0 ? Math.max(...prev.map((b) => b.id || 0)) + 1 : 1;
+      const newSequence = (prev.length + 1).toString();
+
+      return [
+        ...prev,
+        {
+          id: newId,
+          payrollHead,
+          type: 'Fixed',
+          percentageFormula: '',
+          baseHead: 'Gross Salary',
+          amount: finalAmount,
+          sequence: newSequence,
+        },
+      ];
+    });
   };
 
   // Add from dropdown selection
@@ -809,14 +828,13 @@ export default function EditEmployeeSalaryInformationPage() {
           </h5>
           <div className="row g-3">
             <div className="col-md-3">
-              <label className="form-label fw-medium">Emp Code <span className="text-danger">*</span></label>
+              <label className="form-label fw-medium">Emp Code</label>
               <input
                 type="text"
                 className="form-control"
-                placeholder="Browse or Write"
+                placeholder="Emp Code"
                 value={empCode}
-                onChange={(e) => setEmpCode(e.target.value)}
-                required
+                disabled
               />
             </div>
             <div className="col-md-3">
@@ -1217,7 +1235,7 @@ export default function EditEmployeeSalaryInformationPage() {
                   </tr>
                 )}
                 {salaryBreakdown.map((row) => {
-                  const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
+                  const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
                   const isBasic = basicComponents.includes(row.payrollHead);
                   const isAddition = ['Attendance Bonus', 'Incentive', 'Performance Bonus'].includes(row.payrollHead) ||
                     (parseFloat(row.amount || '0') > 0 && !isBasic && row.payrollHead !== '');
@@ -1240,9 +1258,8 @@ export default function EditEmployeeSalaryInformationPage() {
                           <optgroup label="Basic Structure">
                             <option value="Basic">Basic</option>
                             <option value="House Rent">House Rent</option>
-                            <option value="Medical">Medical</option>
-                            <option value="Transport">Transport</option>
-                            <option value="Food">Food</option>
+                            <option value="Medical Allowance">Medical Allowance</option>
+                            <option value="Conveyance">Conveyance</option>
                             <option value="Stamp">Stamp</option>
                           </optgroup>
                           <optgroup label="Additions">

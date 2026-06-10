@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { RolesGuard } from './common/guards/roles.guard';
 import { ConfigModule } from '@nestjs/config';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
@@ -12,11 +14,11 @@ import { EmployeeSalaryInformationModule } from './modules/employee-salary-infor
 import { LibraryModule } from './modules/library/library.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
-import { ZktecoMachineModule } from './modules/zkteco-machine/zkteco-machine.module';
 import { HrmModule } from './modules/hrm/hrm.module';
 
 @Module({
   imports: [
+    // ...existing imports
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
@@ -35,8 +37,8 @@ import { HrmModule } from './modules/hrm/hrm.module';
     LibraryModule,
     AuthModule,
     UsersModule,
-    ZktecoMachineModule,
     HrmModule,
   ],
+  providers: [{ provide: APP_GUARD, useClass: RolesGuard }],
 })
 export class AppModule {}

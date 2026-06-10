@@ -15,10 +15,14 @@ export default function NewEmployeeSalaryInformationPage() {
   const [validatingEmployee, setValidatingEmployee] = useState(false);
   const [employeeError, setEmployeeError] = useState<string | null>(null);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [searchType, setSearchType] = useState<'name' | 'acc_no'>('name');
 
   const [empCode, setEmpCode] = useState('');
   const [empId, setEmpId] = useState('');
   const [empName, setEmpName] = useState('');
+  const [empNo, setEmpNo] = useState('');    // Emp No. field
+  const [acNo, setAcNo] = useState('');      // AC-No. field  
+  const [no, setNo] = useState('');          // No. field
   const [category, setCategory] = useState('');
   const [company, setCompany] = useState('');
   const [location, setLocation] = useState('');
@@ -65,7 +69,7 @@ export default function NewEmployeeSalaryInformationPage() {
   ]);
 
   const [salaryBreakdown, setSalaryBreakdown] = useState<SalaryBreakdown[]>([]);
-  const [basicMode, setBasicMode] = useState<'formula' | 'percentage'>('formula');
+  const [basicMode, setBasicMode] = useState<'formula' | 'percentage'>('percentage');
 
   // Dropdown selection states for quick add
   const [selectedAddition, setSelectedAddition] = useState('');
@@ -116,10 +120,9 @@ export default function NewEmployeeSalaryInformationPage() {
           if (field === 'payrollHead' && updated.type === 'Percentage') {
             const headPercentages: Record<string, string> = {
               'Basic': '50',
-              'House Rent': '35',
-              'Medical': '5',
-              'Transport': '5',
-              'Food': '5',
+              'House Rent': '30',
+              'Medical Allowance': '15',
+              'Conveyance': '5',
               'Stamp': '0',
             };
             if (headPercentages[value]) {
@@ -170,22 +173,29 @@ export default function NewEmployeeSalaryInformationPage() {
 
   // Quick add functions for additions and deductions
   const quickAddRow = (payrollHead: string, amount: string, isDeduction: boolean = false) => {
-    const newId = salaryBreakdown.length > 0 ? Math.max(...salaryBreakdown.map((b) => b.id || 0)) + 1 : 1;
-    const newSequence = (salaryBreakdown.length + 1).toString();
     const finalAmount = isDeduction ? (-parseFloat(amount || '0')).toFixed(2) : parseFloat(amount || '0').toFixed(2);
     
-    setSalaryBreakdown((prev) => [
-      ...prev,
-      {
-        id: newId,
-        payrollHead,
-        type: 'Fixed',
-        percentageFormula: '',
-        baseHead: 'Gross Salary',
-        amount: finalAmount,
-        sequence: newSequence,
-      },
-    ]);
+    console.log('quickAddRow called:', { payrollHead, amount, finalAmount, isDeduction });
+    
+    setSalaryBreakdown((prev) => {
+      const newId = prev.length > 0 ? Math.max(...prev.map((b) => b.id || 0)) + 1 : 1;
+      const newSequence = (prev.length + 1).toString();
+      
+      console.log('Adding row to salaryBreakdown:', { newId, payrollHead, finalAmount, prevLength: prev.length });
+      
+      return [
+        ...prev,
+        {
+          id: newId,
+          payrollHead,
+          type: 'Fixed',
+          percentageFormula: '',
+          baseHead: 'Gross Salary',
+          amount: finalAmount,
+          sequence: newSequence,
+        },
+      ];
+    });
   };
 
   const quickAddAddition = (type: 'attendance' | 'incentive' | 'other') => {
@@ -230,18 +240,27 @@ export default function NewEmployeeSalaryInformationPage() {
 
   // Add from dropdown selection
   const addFromDropdown = (type: 'addition' | 'deduction') => {
+    console.log('addFromDropdown called:', { type, selectedAddition, additionAmount, selectedDeduction, deductionAmount });
+    
     if (type === 'addition' && selectedAddition && additionAmount) {
       const label = selectedAddition === 'Other' ? customAdditionLabel : selectedAddition;
       if (selectedAddition === 'Other' && !label) return;
       
+      console.log('Adding addition:', { label, amount: additionAmount });
+      
       // ALWAYS add to otherAdditions array so it's saved properly
-      setOtherAdditions(prev => [...prev, {
-        id: prev.length + 1,
-        label: label,
-        amount: additionAmount
-      }]);
+      setOtherAdditions(prev => {
+        const newAddition = {
+          id: prev.length + 1,
+          label: label,
+          amount: additionAmount
+        };
+        console.log('Adding to otherAdditions:', newAddition);
+        return [...prev, newAddition];
+      });
       
       quickAddRow(label, additionAmount, false);
+      
       // Reset fields
       setSelectedAddition('');
       setAdditionAmount('');
@@ -271,10 +290,9 @@ export default function NewEmployeeSalaryInformationPage() {
     // Default percentages for each Payroll Head
     const defaultPercentages: Record<string, number> = {
       'Basic': 50,
-      'House Rent': 35,
-      'Medical': 5,
-      'Transport': 5,
-      'Food': 5,
+      'House Rent': 30,
+      'Medical Allowance': 15,
+      'Conveyance': 5,
       'Stamp': 0,
     };
     
@@ -282,10 +300,9 @@ export default function NewEmployeeSalaryInformationPage() {
     const basicRow = currentBreakdown.find(row => row.payrollHead === 'Basic');
     const isBasicFormula = basicRow && basicRow.type === 'Formula';
     
-    // Step 1: Calculate Medical, Transport, Food first (they are inputs to Basic formula)
+    // Step 1: Calculate Medical Allowance and Conveyance first (they are inputs to Basic formula)
     let medicalAmount = 0;
-    let transportAmount = 0;
-    let foodAmount = 0;
+    let conveyanceAmount = 0;
     
     const firstPassBreakdown = currentBreakdown.map((row) => {
       if (row.payrollHead === 'Basic' || row.payrollHead === 'House Rent' || row.payrollHead === 'Stamp') {
@@ -293,7 +310,7 @@ export default function NewEmployeeSalaryInformationPage() {
         return { ...row, amount: '' };
       }
       
-      if (row.payrollHead === 'Medical' || row.payrollHead === 'Transport' || row.payrollHead === 'Food') {
+      if (row.payrollHead === 'Medical Allowance' || row.payrollHead === 'Conveyance') {
         let amount = 0;
         if (row.type === 'Fixed') {
           amount = parseFloat(row.amount) || 0;
@@ -303,9 +320,8 @@ export default function NewEmployeeSalaryInformationPage() {
           amount = gross * (pct / 100);
         }
         
-        if (row.payrollHead === 'Medical') medicalAmount = amount;
-        if (row.payrollHead === 'Transport') transportAmount = amount;
-        if (row.payrollHead === 'Food') foodAmount = amount;
+        if (row.payrollHead === 'Medical Allowance') medicalAmount = amount;
+        if (row.payrollHead === 'Conveyance') conveyanceAmount = amount;
         
         return {
           ...row,
@@ -317,7 +333,7 @@ export default function NewEmployeeSalaryInformationPage() {
       return { ...row };
     });
     
-    console.log('Step 1 - Medical:', medicalAmount, 'Transport:', transportAmount, 'Food:', foodAmount);
+    console.log('Step 1 - Medical Allowance:', medicalAmount, 'Conveyance:', conveyanceAmount);
 
     // Step 2: Calculate Basic
     let basicAmount = 0;
@@ -325,8 +341,8 @@ export default function NewEmployeeSalaryInformationPage() {
     
     if (basicRow) {
       if (basicRow.type === 'Formula') {
-        // Formula: Basic = (Gross - Medical - Transport - Food) / 1.5
-        basicAmount = (gross - medicalAmount - transportAmount - foodAmount) / 1.5;
+        // Formula: Basic = (Gross - Medical Allowance - Conveyance) / 1.35
+        basicAmount = (gross - medicalAmount - conveyanceAmount) / 1.35;
         console.log('Formula Basic:', basicAmount);
       } else if (basicRow.type === 'Fixed') {
         basicAmount = parseFloat(basicRow.amount) || 0;
@@ -336,7 +352,7 @@ export default function NewEmployeeSalaryInformationPage() {
         basicAmount = gross * (pct / 100);
       }
       
-      remainingAfterBasic = gross - medicalAmount - transportAmount - foodAmount - basicAmount;
+      remainingAfterBasic = gross - medicalAmount - conveyanceAmount - basicAmount;
       console.log('Remaining after Basic:', remainingAfterBasic);
       
       // Update Basic row
@@ -414,9 +430,9 @@ export default function NewEmployeeSalaryInformationPage() {
       console.log('Creating new breakdown...');
       const targetStructure = [
         { head: 'Basic', pct: 50 },
-        { head: 'House Rent', pct: 35 },
-        { head: 'Medical', pct: 5 },
-        { head: 'Food', pct: 10 },
+        { head: 'House Rent', pct: 30 },
+        { head: 'Medical Allowance', pct: 15 },
+        { head: 'Conveyance', pct: 5 },
       ];
 
       const newBreakdown: SalaryBreakdown[] = targetStructure.map((item, index) => ({
@@ -446,11 +462,12 @@ export default function NewEmployeeSalaryInformationPage() {
   const getTotalWithAdditions = () => {
     const base = parseFloat(grossSalary || '0');
     // Calculate additions from salaryBreakdown table rows
+    const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
     const additionsFromTable = salaryBreakdown.reduce((sum, row) => {
       const amount = parseFloat(row.amount || '0');
+      const payrollHead = (row.payrollHead || '').trim();
       // Additions are positive amounts that are not basic salary components
-      const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
-      if (amount > 0 && !basicComponents.includes(row.payrollHead)) {
+      if (amount > 0 && !basicComponents.includes(payrollHead)) {
         return sum + amount;
       }
       return sum;
@@ -471,10 +488,13 @@ export default function NewEmployeeSalaryInformationPage() {
 
   const getAdditionsOnly = () => {
     // Return just the additions amount (without base gross)
+    const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
     return salaryBreakdown.reduce((sum, row) => {
       const amount = parseFloat(row.amount || '0');
-      const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
-      if (amount > 0 && !basicComponents.includes(row.payrollHead)) {
+      const payrollHead = (row.payrollHead || '').trim();
+      // Debug log to see what's being counted
+      if (amount > 0 && !basicComponents.includes(payrollHead)) {
+        console.log('Counting as addition:', payrollHead, amount);
         return sum + amount;
       }
       return sum;
@@ -494,57 +514,65 @@ export default function NewEmployeeSalaryInformationPage() {
       return;
     }
 
-    // If user has existing breakdown, enforce fixed values and recalculate
+    // If user has existing breakdown, recalculate based on mode
     if (salaryBreakdown.length > 0) {
-      // Fixed values for Medical, Transport, Food
+      // Fixed values for original formula mode
       const FIXED_MEDICAL = 450;
       const FIXED_TRANSPORT = 1250;
       const FIXED_FOOD = 750;
       const totalFixed = FIXED_MEDICAL + FIXED_TRANSPORT + FIXED_FOOD;
 
-      // Calculate based on mode
+      // Percentage mode: Use new structure (Basic 50%, House Rent 30%, Medical Allowance 15%, Conveyance 5%)
+      // Formula mode: Use fixed amounts (450, 1250, 750) with (Gross - Fixed) / 1.5
       let basicAmount: number;
       let houseRentAmount: number;
+      let medicalAllowanceAmount: number;
+      let conveyanceAmount: number;
       let basicType: string;
       let houseRentType: string;
+      let medicalType: string;
+      let conveyanceType: string;
 
       if (basicMode === 'percentage') {
-        // Percentage mode: Basic = 50% of Gross, House Rent = balance
-        basicAmount = gross * 0.50;
-        houseRentAmount = gross - basicAmount - totalFixed;
+        // Percentage mode: Fixed structure
+        // Basic Salary (50%), House Rent (30%), Medical Allowance (15%), Conveyance (5%) = Total 100%
+        basicAmount = gross * 0.50; // 50%
+        houseRentAmount = gross * 0.30; // 30%
+        medicalAllowanceAmount = gross * 0.15; // 15%
+        conveyanceAmount = gross * 0.05; // 5%
         basicType = 'Percentage';
-        houseRentType = 'Calculated';
-
-        // Validate that House Rent is positive
-        if (houseRentAmount < 0) {
-          alert(`Warning: Gross salary (${gross}) is too low for 50% Basic + Fixed allowances (${totalFixed}). House Rent would be negative.`);
-        }
+        houseRentType = 'Percentage';
+        medicalType = 'Percentage';
+        conveyanceType = 'Percentage';
       } else {
-        // Formula mode: Auto-balanced (Basic = remaining / 1.5)
-        const remaining = gross - totalFixed;
-        basicAmount = remaining / 1.5;
-        houseRentAmount = remaining / 3;
+        // Formula mode: Keep original fixed amounts
+        basicAmount = (gross - totalFixed) / 1.5;
+        houseRentAmount = (gross - totalFixed) / 3;
+        medicalAllowanceAmount = FIXED_MEDICAL; // 450
+        conveyanceAmount = FIXED_TRANSPORT + FIXED_FOOD; // 1250 + 750 = 2000
         basicType = 'Formula';
         houseRentType = 'Formula';
+        medicalType = 'Fixed';
+        conveyanceType = 'Fixed';
       }
 
       // Calculate percentages based on gross
       const basicPct = ((basicAmount / gross) * 100).toFixed(2);
       const houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
-      const medicalPct = ((FIXED_MEDICAL / gross) * 100).toFixed(2);
-      const transportPct = ((FIXED_TRANSPORT / gross) * 100).toFixed(2);
-      const foodPct = ((FIXED_FOOD / gross) * 100).toFixed(2);
+      const medicalAllowancePct = ((medicalAllowanceAmount / gross) * 100).toFixed(2);
+      const conveyancePct = ((conveyanceAmount / gross) * 100).toFixed(2);
 
       const updatedBreakdown = salaryBreakdown.map((row) => {
-        // Enforce fixed values for Medical, Transport, Food
-        if (row.payrollHead === 'Medical') {
-          return { ...row, type: 'Fixed', amount: FIXED_MEDICAL.toFixed(2), percentageFormula: medicalPct };
+        // Apply values based on payroll head and mode
+        if (row.payrollHead === 'Medical Allowance') {
+          const amount = basicMode === 'percentage' ? medicalAllowanceAmount.toFixed(2) : FIXED_MEDICAL.toFixed(2);
+          const pct = basicMode === 'percentage' ? '15' : medicalAllowancePct;
+          return { ...row, type: medicalType, amount, percentageFormula: pct };
         }
-        if (row.payrollHead === 'Transport') {
-          return { ...row, type: 'Fixed', amount: FIXED_TRANSPORT.toFixed(2), percentageFormula: transportPct };
-        }
-        if (row.payrollHead === 'Food') {
-          return { ...row, type: 'Fixed', amount: FIXED_FOOD.toFixed(2), percentageFormula: foodPct };
+        if (row.payrollHead === 'Conveyance') {
+          const amount = basicMode === 'percentage' ? conveyanceAmount.toFixed(2) : (FIXED_TRANSPORT + FIXED_FOOD).toFixed(2);
+          const pct = basicMode === 'percentage' ? '5' : conveyancePct;
+          return { ...row, type: conveyanceType, amount, percentageFormula: pct };
         }
         // Recalculate Basic based on mode
         if (row.payrollHead === 'Basic') {
@@ -560,54 +588,64 @@ export default function NewEmployeeSalaryInformationPage() {
       });
       setSalaryBreakdown(updatedBreakdown);
     } else {
-      // Fixed values for Medical, Transport, Food
+      // Fixed values for original formula mode
       const FIXED_MEDICAL = 450;
       const FIXED_TRANSPORT = 1250;
       const FIXED_FOOD = 750;
       const totalFixed = FIXED_MEDICAL + FIXED_TRANSPORT + FIXED_FOOD;
 
-      // Calculate based on mode
+      // Percentage mode: Use new structure (Basic 50%, House Rent 30%, Medical Allowance 15%, Conveyance 5%)
+      // Formula mode: Use fixed amounts (450, 1250, 750) with (Gross - Fixed) / 1.5
       let basicAmount: number;
       let houseRentAmount: number;
+      let medicalAllowanceAmount: number;
+      let conveyanceAmount: number;
       let basicType: string;
       let houseRentType: string;
+      let medicalType: string;
+      let conveyanceType: string;
       let basicPct: string;
       let houseRentPct: string;
+      let medicalAllowancePct: string;
+      let conveyancePct: string;
 
       if (basicMode === 'percentage') {
-        // Percentage mode: Basic = 50% of Gross, House Rent = balance
-        basicAmount = gross * 0.50;
-        houseRentAmount = gross - basicAmount - totalFixed;
+        // Percentage mode: Fixed structure
+        // Basic Salary (50%), House Rent (30%), Medical Allowance (15%), Conveyance (5%) = Total 100%
+        basicAmount = gross * 0.50; // 50%
+        houseRentAmount = gross * 0.30; // 30%
+        medicalAllowanceAmount = gross * 0.15; // 15%
+        conveyanceAmount = gross * 0.05; // 5%
         basicType = 'Percentage';
-        houseRentType = 'Calculated';
+        houseRentType = 'Percentage';
+        medicalType = 'Percentage';
+        conveyanceType = 'Percentage';
         basicPct = '50';
-        houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
-
-        if (houseRentAmount < 0) {
-          alert(`Warning: Gross salary (${gross}) is too low for 50% Basic + Fixed allowances (${totalFixed}).`);
-        }
+        houseRentPct = '30';
+        medicalAllowancePct = '15';
+        conveyancePct = '5';
       } else {
-        // Formula mode: Auto-balanced
-        const remaining = gross - totalFixed;
-        basicAmount = remaining / 1.5;
-        houseRentAmount = remaining / 3;
+        // Formula mode: Keep original fixed amounts
+        basicAmount = (gross - totalFixed) / 1.5;
+        houseRentAmount = (gross - totalFixed) / 3;
+        medicalAllowanceAmount = FIXED_MEDICAL; // 450
+        conveyanceAmount = FIXED_TRANSPORT + FIXED_FOOD; // 1250 + 750 = 2000
         basicType = 'Formula';
         houseRentType = 'Formula';
+        medicalType = 'Fixed';
+        conveyanceType = 'Fixed';
         basicPct = ((basicAmount / gross) * 100).toFixed(2);
         houseRentPct = ((houseRentAmount / gross) * 100).toFixed(2);
+        medicalAllowancePct = ((medicalAllowanceAmount / gross) * 100).toFixed(2);
+        conveyancePct = ((conveyanceAmount / gross) * 100).toFixed(2);
       }
 
-      const medicalPct = ((FIXED_MEDICAL / gross) * 100).toFixed(2);
-      const transportPct = ((FIXED_TRANSPORT / gross) * 100).toFixed(2);
-      const foodPct = ((FIXED_FOOD / gross) * 100).toFixed(2);
-
-      // Create new default structure with fixed values and calculated percentages
+      // Create new default structure with values based on selected mode
       const baseStructure: SalaryBreakdown[] = [
         { id: 1, payrollHead: 'Basic', type: basicType, percentageFormula: basicPct, baseHead: 'Gross Salary', amount: basicAmount.toFixed(2), sequence: '1' },
         { id: 2, payrollHead: 'House Rent', type: houseRentType, percentageFormula: houseRentPct, baseHead: 'Gross Salary', amount: houseRentAmount.toFixed(2), sequence: '2' },
-        { id: 3, payrollHead: 'Medical', type: 'Fixed', percentageFormula: medicalPct, baseHead: 'Gross Salary', amount: FIXED_MEDICAL.toFixed(2), sequence: '3' },
-        { id: 4, payrollHead: 'Transport', type: 'Fixed', percentageFormula: transportPct, baseHead: 'Gross Salary', amount: FIXED_TRANSPORT.toFixed(2), sequence: '4' },
-        { id: 5, payrollHead: 'Food', type: 'Fixed', percentageFormula: foodPct, baseHead: 'Gross Salary', amount: FIXED_FOOD.toFixed(2), sequence: '5' },
+        { id: 3, payrollHead: 'Medical Allowance', type: medicalType, percentageFormula: medicalAllowancePct, baseHead: 'Gross Salary', amount: medicalAllowanceAmount.toFixed(2), sequence: '3' },
+        { id: 4, payrollHead: 'Conveyance', type: conveyanceType, percentageFormula: conveyancePct, baseHead: 'Gross Salary', amount: conveyanceAmount.toFixed(2), sequence: '4' },
       ];
 
       let nextId = baseStructure.length + 1;
@@ -928,10 +966,21 @@ export default function NewEmployeeSalaryInformationPage() {
     setEmployeeError(null);
     setDuplicateError(null);
     
-    // Auto-populate form fields
-    setEmpCode(employee.emp_code);
-    setEmpId(employee.emp_id);
-    setEmpName(employee.full_name_english);
+    // Auto-populate all 4 identity fields based on search type
+    if (searchType === 'acc_no') {
+      // When searching by AC-No., show AC-No. in search field
+      setEmpCode(employee.acNo || employee.emp_code);
+    } else {
+      // When searching by name, show name in search field
+      setEmpCode(employee.name || employee.full_name_english);
+    }
+    
+    // Populate all 4 identity fields from employee data
+    setEmpNo(employee.empNo || '');           // Emp No.
+    setAcNo(employee.acNo || '');             // AC-No.
+    setNo(employee.no || '');                 // No.
+    setEmpName(employee.name || employee.full_name_english); // Name
+    setEmpId(employee.empNo || '');           // Emp ID (for compatibility)
     setDepartment(employee.department || '');
     setDesignation(employee.designation || '');
     setCompany(employee.company || '');
@@ -941,10 +990,16 @@ export default function NewEmployeeSalaryInformationPage() {
       setValidatingEmployee(true);
       const existing = await employeeSalaryInformationService.getByEmpCode(employee.emp_code);
       if (existing && existing.id) {
-        setDuplicateError(`Employee ${employee.full_name_english} (${employee.emp_code}) already has salary information.`);
+        // Redirect to edit page if salary record already exists
+        if (confirm(`Employee ${employee.full_name_english} (${employee.emp_code}) already has salary information. Would you like to edit the existing record?`)) {
+          router.push(`/employee-salary-information/${existing.id}/edit`);
+        } else {
+          setDuplicateError(`Employee ${employee.full_name_english} (${employee.emp_code}) already has salary information.`);
+        }
+        return;
       }
     } catch (err) {
-      // Employee doesn't have salary info yet - good
+      // Employee doesn't have salary info yet - good, proceed with new entry
     } finally {
       setValidatingEmployee(false);
     }
@@ -955,32 +1010,74 @@ export default function NewEmployeeSalaryInformationPage() {
     setEmpCode(value || '');
     setEmployeeError(null);
     setDuplicateError(null);
+    setSelectedEmployee(null);
     
     if (value && value.length >= 2) {
       try {
         setValidatingEmployee(true);
-        const result = await employeeService.validateEmployee(value);
-        if (result.valid && result.employee) {
-          handleEmployeeSelect({
-            id: result.employee.id,
-            emp_code: result.employee.emp_code,
-            emp_id: result.employee.emp_id,
-            full_name_english: result.employee.full_name_english,
-            full_name_bangla: result.employee.full_name_bangla,
-            department: result.employee.department,
-            designation: result.employee.designation,
-            company: result.employee.company,
-          });
+        
+        if (searchType === 'acc_no') {
+          // For AC-No. search, use validateEmployee
+          const result = await employeeService.validateEmployee(value);
+          if (result.valid && result.employee) {
+            const emp = result.employee;
+            handleEmployeeSelect({
+              id: emp.id,
+              // 4 Identity Columns (required for EmployeeSuggestion)
+              empNo: emp.empNo || emp.emp_id || '',
+              acNo: emp.acNo || emp.emp_code || emp.punch_card || '',
+              no: emp.no || emp.emp_code || '',
+              name: emp.name || emp.full_name_english || '',
+              // Legacy fields (for backward compatibility)
+              emp_code: emp.emp_code || emp.acNo || emp.no || '',
+              emp_id: emp.emp_id || emp.empNo || '',
+              full_name_english: emp.full_name_english || emp.name || '',
+              full_name_bangla: emp.full_name_bangla || '',
+              department: emp.department || '',
+              designation: emp.designation || '',
+              company: emp.company || '',
+            });
+          } else {
+            setEmployeeError(`Employee with AC-No. '${value}' not found in system.`);
+          }
         } else {
-          setEmployeeError(`Employee with code '${value}' not found in system.`);
-          setSelectedEmployee(null);
+          // For name search, use search suggestions and find exact match
+          const suggestions = await employeeService.getSearchSuggestions(value, 10, 'name');
+          const exactMatch = suggestions.find(emp => 
+            emp.name && emp.name.toLowerCase() === value.toLowerCase().trim()
+          );
+          
+          if (exactMatch) {
+            handleEmployeeSelect({
+              id: exactMatch.id,
+              // 4 Identity Columns (already available from suggestions)
+              empNo: exactMatch.empNo || '',
+              acNo: exactMatch.acNo || '',
+              no: exactMatch.no || '',
+              name: exactMatch.name || '',
+              // Legacy fields (for backward compatibility)
+              emp_code: exactMatch.emp_code || exactMatch.acNo || exactMatch.no || '',
+              emp_id: exactMatch.emp_id || exactMatch.empNo || '',
+              full_name_english: exactMatch.full_name_english || exactMatch.name || '',
+              full_name_bangla: exactMatch.full_name_bangla || '',
+              department: exactMatch.department || '',
+              designation: exactMatch.designation || '',
+              company: exactMatch.company || '',
+            });
+          } else {
+            setEmployeeError(`Employee with name '${value}' not found in system.`);
+          }
         }
       } catch (err: any) {
-        setEmployeeError(`Employee with code '${value}' not found in system.`);
+        const searchTypeText = searchType === 'acc_no' ? 'AC-No.' : 'name';
+        setEmployeeError(`Employee with ${searchTypeText} '${value}' not found in system.`);
         setSelectedEmployee(null);
       } finally {
         setValidatingEmployee(false);
       }
+    } else if (value && value.length < 2) {
+      // Clear validation when user deletes characters
+      setSelectedEmployee(null);
     }
   };
 
@@ -1004,6 +1101,9 @@ export default function NewEmployeeSalaryInformationPage() {
         empCode,
         empId,
         empName,
+        empNo,    // Send Emp No.
+        acNo,      // Send AC-No.
+        no,        // Send No.
         category,
         company,
         location,
@@ -1039,6 +1139,9 @@ export default function NewEmployeeSalaryInformationPage() {
       setEmpCode('');
       setEmpId('');
       setEmpName('');
+      setEmpNo('');    // Clear Emp No.
+      setAcNo('');      // Clear AC-No.
+      setNo('');        // Clear No.
       setCategory('');
       setCompany('');
       setLocation('');
@@ -1101,11 +1204,13 @@ export default function NewEmployeeSalaryInformationPage() {
           <div className="row g-3">
             <div className="col-md-6">
               <EmployeeSearch
-                label="Emp Code *"
+                label="Search Employee *"
                 value={empCode}
                 onChange={handleEmpCodeChange}
                 onSelect={handleEmployeeSelect}
-                placeholder="Search employee by name, code, or ID..."
+                onSearchTypeChange={setSearchType}
+                searchType={searchType}
+                placeholder={searchType === 'acc_no' ? 'Enter AC-No.' : 'Enter employee name...'}
                 required
               />
               {employeeError && <div className="invalid-feedback d-block">{employeeError}</div>}
@@ -1123,17 +1228,37 @@ export default function NewEmployeeSalaryInformationPage() {
               )}
             </div>
             <div className="col-md-3">
-              <label className="form-label fw-medium">Emp ID</label>
+              <label className="form-label fw-medium">Emp No.</label>
               <input
                 type="text"
                 className="form-control"
                 placeholder="Auto-populated"
-                value={empId}
+                value={empNo}
                 readOnly
               />
             </div>
             <div className="col-md-3">
-              <label className="form-label fw-medium">Emp Name</label>
+              <label className="form-label fw-medium">AC-No.</label>
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Auto-populated"
+                value={acNo}
+                readOnly
+              />
+            </div>
+            <div className="col-md-3">
+              <label className="form-label fw-medium">No.</label>
+              <input
+                type="text"
+                className="form-control"
+                placeholder="Auto-populated"
+                value={no}
+                readOnly
+              />
+            </div>
+            <div className="col-md-3">
+              <label className="form-label fw-medium">Name</label>
               <input
                 type="text"
                 className="form-control"
@@ -1521,7 +1646,7 @@ export default function NewEmployeeSalaryInformationPage() {
                   </tr>
                 )}
                 {salaryBreakdown.map((row) => {
-                  const basicComponents = ['Basic', 'House Rent', 'Medical', 'Transport', 'Food', 'Stamp'];
+                  const basicComponents = ['Basic', 'House Rent', 'Medical Allowance', 'Conveyance', 'Stamp'];
                   const isBasic = basicComponents.includes(row.payrollHead);
                   const isAddition = ['Attendance Bonus', 'Incentive', 'Performance Bonus'].includes(row.payrollHead) || 
                     (parseFloat(row.amount || '0') > 0 && !isBasic && row.payrollHead !== '');
@@ -1544,9 +1669,8 @@ export default function NewEmployeeSalaryInformationPage() {
                           <optgroup label="Basic Structure">
                             <option value="Basic">Basic</option>
                             <option value="House Rent">House Rent</option>
-                            <option value="Medical">Medical</option>
-                            <option value="Transport">Transport</option>
-                            <option value="Food">Food</option>
+                            <option value="Medical Allowance">Medical Allowance</option>
+                            <option value="Conveyance">Conveyance</option>
                             <option value="Stamp">Stamp</option>
                           </optgroup>
                           <optgroup label="Additions">
@@ -1601,7 +1725,7 @@ export default function NewEmployeeSalaryInformationPage() {
                       >
                         <option value="Gross Salary">Gross Salary</option>
                         <option value="Basic">Basic</option>
-                        <option value="Medical">Medical</option>
+                        <option value="Medical Allowance">Medical Allowance</option>
                       </select>
                     </td>
                     <td>

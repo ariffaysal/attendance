@@ -1,5 +1,11 @@
 export interface BankInfo {
   id?: number;
+  // CSV columns
+  empNo?: string;
+  acNo?: string;
+  no?: string;
+  name?: string;
+  // Legacy
   empCode?: string;
   salaryBank: string;
   branchName: string;
@@ -14,6 +20,12 @@ export interface BankInfo {
 
 export interface SalaryBreakdown {
   id?: number;
+  // CSV columns
+  empNo?: string;
+  acNo?: string;
+  no?: string;
+  name?: string;
+  // Legacy
   empCode?: string;
   payrollHead: string;
   type: string;
@@ -26,12 +38,19 @@ export interface SalaryBreakdown {
 }
 
 export interface EmployeeSalaryInformation {
+  joinDate: string;
   id?: number;
   
-  // Employee Details
-  empCode: string;
-  empId: string;
-  empName: string;
+  // CSV 4 columns (new standard)
+  empNo?: string;    // `Emp No.` from CSV
+  acNo?: string;     // `AC-No.` from CSV - PRIMARY key
+  no?: string;       // `No.` from CSV
+  name?: string;     // `Name` from CSV
+  
+  // Employee Details (legacy - for backward compatibility)
+  empCode: string;   // Maps to `No.`
+  empId: string;   // Maps to `Emp No.`
+  empName: string; // Maps to `Name`
   category: string;
   company: string;
   location: string;

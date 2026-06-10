@@ -15,13 +15,15 @@ interface EmployeeSearchProps {
   showSuggestions?: boolean;
   disabled?: boolean;
   label?: string;
+  searchType?: 'name' | 'acc_no';
+  onSearchTypeChange?: (searchType: 'name' | 'acc_no') => void;
 }
 
 export default function EmployeeSearch({
   value,
   onChange,
   onSelect,
-  placeholder = 'Search by name, code, or ID...',
+  placeholder = 'Search by name or AC-No....',
   required = false,
   name,
   id,
@@ -29,6 +31,8 @@ export default function EmployeeSearch({
   showSuggestions = true,
   disabled = false,
   label,
+  searchType = 'name',
+  onSearchTypeChange,
 }: EmployeeSearchProps) {
   const [suggestions, setSuggestions] = useState<EmployeeSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,7 +51,7 @@ export default function EmployeeSearch({
 
     setLoading(true);
     try {
-      const data = await employeeService.getSearchSuggestions(query, 10);
+      const data = await employeeService.getSearchSuggestions(query, 10, searchType);
       setSuggestions(data);
     } catch (err) {
       console.error('Failed to fetch suggestions:', err);
@@ -55,7 +59,7 @@ export default function EmployeeSearch({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [searchType]);
 
   // Handle input change
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,7 +85,12 @@ export default function EmployeeSearch({
 
   // Handle employee selection
   const handleSelect = (employee: EmployeeSuggestion) => {
-    onChange(employee.emp_code);
+    // Use the appropriate field based on search type
+    const displayValue = searchType === 'acc_no' 
+      ? (employee.acNo || employee.emp_code || '')
+      : (employee.name || employee.full_name_english || '');
+    
+    onChange(displayValue);
     setShowDropdown(false);
     if (onSelect) {
       onSelect(employee);
@@ -152,6 +161,19 @@ export default function EmployeeSearch({
         </label>
       )}
       <div className="input-group">
+        {onSearchTypeChange && (
+          <select
+            className="form-select"
+            value={searchType}
+            onChange={(e) => onSearchTypeChange(e.target.value as 'name' | 'acc_no')}
+            title="Select search type"
+            aria-label="Search type"
+            style={{ maxWidth: '120px' }}
+          >
+            <option value="name">Name</option>
+            <option value="acc_no">AC-No.</option>
+          </select>
+        )}
         <span className="input-group-text bg-light">
           <i className="fas fa-search text-muted"></i>
         </span>
@@ -240,25 +262,50 @@ export default function EmployeeSearch({
                       <i className="fas fa-user"></i>
                     </div>
                     <div className="text-start flex-grow-1">
+                      {/* Employee Name */}
                       <div className={`fw-semibold ${index === selectedIndex ? 'text-white' : 'text-dark'}`}>
-                        {employee.full_name_english}
+                        {employee.name || employee.full_name_english || 'Unknown'}
                         {employee.full_name_bangla && (
                           <span className="ms-1 text-muted" style={{ fontSize: '0.85em' }}>
                             ({employee.full_name_bangla})
                           </span>
                         )}
                       </div>
+                      {/* Show only Name and AC-No. columns as per system requirements */}
                       <div className={`small ${index === selectedIndex ? 'text-white-50' : 'text-muted'}`}>
-                        <span className="badge bg-secondary me-1">#{employee.emp_code}</span>
-                        <span className="me-2">ID: {employee.emp_id}</span>
+                        {searchType === 'acc_no' ? (
+                          <>
+                            {employee.acNo && (
+                              <span className="badge bg-primary me-2" title="AC-No.">AC: {employee.acNo}</span>
+                            )}
+                            {employee.name && (
+                              <span>
+                                <i className="fas fa-user me-1"></i>
+                                {employee.name}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {employee.name && (
+                              <span className="me-2">
+                                <i className="fas fa-user me-1"></i>
+                                {employee.name}
+                              </span>
+                            )}
+                            {employee.acNo && (
+                              <span className="badge bg-primary" title="AC-No.">AC: {employee.acNo}</span>
+                            )}
+                          </>
+                        )}
                         {employee.department && (
-                          <span className="me-2">
+                          <span className="ms-2">
                             <i className="fas fa-building me-1"></i>
                             {employee.department}
                           </span>
                         )}
                         {employee.designation && (
-                          <span>
+                          <span className="ms-2">
                             <i className="fas fa-briefcase me-1"></i>
                             {employee.designation}
                           </span>

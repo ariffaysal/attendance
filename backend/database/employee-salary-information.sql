@@ -1,8 +1,17 @@
+-- employee-salary-information.sql
+-- Employee salary header data
+-- Primary identity: AC-No. (all 4 columns stored, AC-No. is the lookup key)
+
 CREATE TABLE IF NOT EXISTS employee_salary_information (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  emp_code VARCHAR(50) NOT NULL,
-  emp_id VARCHAR(50) NULL,
-  emp_name VARCHAR(100) NULL,
+  
+  -- 4 Identity Columns (all stored for display, AC-No. is the lookup key)
+  `Emp No.` VARCHAR(50) NOT NULL DEFAULT '',
+  `AC-No.` VARCHAR(50) NOT NULL,
+  `No.` VARCHAR(50) NOT NULL DEFAULT '',
+  `Name` VARCHAR(200) NOT NULL DEFAULT '',
+  
+  -- Additional info
   category VARCHAR(100) NULL,
   company VARCHAR(100) NULL,
   location VARCHAR(100) NULL,
@@ -28,48 +37,42 @@ CREATE TABLE IF NOT EXISTS employee_salary_information (
   
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_emp_code (emp_code),
-  UNIQUE KEY unique_emp_code (emp_code)
+  
+  -- Indexes
+  UNIQUE KEY unique_ac_no (`AC-No.`),
+  INDEX idx_ac_no (`AC-No.`),
+  INDEX idx_emp_no (`Emp No.`),
+  INDEX idx_no (`No.`),
+  INDEX idx_name (`Name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Migration: Add summary columns to existing table (run this if table already exists)
--- ALTER TABLE employee_salary_information
---   ADD COLUMN IF NOT EXISTS total_additions VARCHAR(50) NULL DEFAULT '0.00' AFTER mode,
---   ADD COLUMN IF NOT EXISTS total_deductions VARCHAR(50) NULL DEFAULT '0.00' AFTER total_additions,
---   ADD COLUMN IF NOT EXISTS net_payable VARCHAR(50) NULL DEFAULT '0.00' AFTER total_deductions;
+-- Migration to add missing columns (run if table already exists)
+ALTER TABLE employee_salary_information 
+ADD COLUMN IF NOT EXISTS category VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS company VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS location VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS division VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS department VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS section VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS subsection VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS designation VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS s_grade VARCHAR(50) NULL,
+ADD COLUMN IF NOT EXISTS st_salary VARCHAR(50) NULL,
+ADD COLUMN IF NOT EXISTS gross_salary VARCHAR(50) NULL,
+ADD COLUMN IF NOT EXISTS b_gross VARCHAR(50) NULL,
+ADD COLUMN IF NOT EXISTS cash_disbursement VARCHAR(10) DEFAULT 'No',
+ADD COLUMN IF NOT EXISTS policy VARCHAR(100) NULL,
+ADD COLUMN IF NOT EXISTS mode VARCHAR(50) DEFAULT 'Actual',
+ADD COLUMN IF NOT EXISTS total_additions VARCHAR(50) NULL DEFAULT '0.00',
+ADD COLUMN IF NOT EXISTS total_deductions VARCHAR(50) NULL DEFAULT '0.00',
+ADD COLUMN IF NOT EXISTS net_payable VARCHAR(50) NULL DEFAULT '0.00',
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
 
--- Migration: Add section and subsection columns if missing (run this if table already exists)
--- ALTER TABLE employee_salary_information
---   ADD COLUMN IF NOT EXISTS section VARCHAR(100) NULL AFTER department,
---   ADD COLUMN IF NOT EXISTS subsection VARCHAR(100) NULL AFTER section;
-
-CREATE TABLE IF NOT EXISTS employee_salary_bank_info (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  emp_code VARCHAR(50) NOT NULL,
-  salary_bank VARCHAR(100) NULL,
-  branch_name VARCHAR(100) NULL,
-  account_no VARCHAR(50) NULL,
-  salary_amount VARCHAR(50) NULL,
-  salary_period VARCHAR(50) NULL,
-  show_tax VARCHAR(10) DEFAULT 'Yes',
-  sequence INT DEFAULT 1,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_emp_code (emp_code),
-  FOREIGN KEY (emp_code) REFERENCES employee_salary_information(emp_code) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS employee_salary_breakdown (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  emp_code VARCHAR(50) NOT NULL,
-  payroll_head VARCHAR(100) NOT NULL,
-  type VARCHAR(50) NOT NULL,
-  percentage_formula VARCHAR(255) NULL,
-  base_head VARCHAR(100) NULL,
-  amount VARCHAR(50) NULL,
-  sequence INT DEFAULT 1,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_emp_code (emp_code),
-  FOREIGN KEY (emp_code) REFERENCES employee_salary_information(emp_code) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+-- Add indexes if they don't exist
+ALTER TABLE employee_salary_information 
+ADD UNIQUE KEY IF NOT EXISTS unique_ac_no (`AC-No.`),
+ADD INDEX IF NOT EXISTS idx_ac_no (`AC-No.`),
+ADD INDEX IF NOT EXISTS idx_emp_no (`Emp No.`),
+ADD INDEX IF NOT EXISTS idx_no (`No.`),
+ADD INDEX IF NOT EXISTS idx_name (`Name`);

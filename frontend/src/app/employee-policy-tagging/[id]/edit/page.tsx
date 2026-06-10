@@ -15,6 +15,7 @@ const DEPARTMENTS = ['Accounts & Billing', 'NOC', 'Sales & Marketing', 'Transmis
 interface PolicyFormData {
   empCode: string;
   empId: string;
+  no: string;
   empName: string;
   category: string;
   company: string;
@@ -39,18 +40,18 @@ function transformFromBackend(data: any, availablePolicies: Policy[]): PolicyFor
     'Holiday Incentive': ['holidayIncentiveRule', 'holidayIncentiveDate'],
     'Duty Roster Policy': ['dutyRosterPolicyRule', 'dutyRosterPolicyDate'],
     'Leave Policy': ['leavePolicyRule', 'leavePolicyDate'],
-    'Maternity Leave Policy': ['maternityLeavePolicyRule', 'maternityLeavePolicyDate'],
-    'Attendance Bonus Policy': ['attendanceBonusPolicyRule', 'attendanceBonusPolicyDate'],
-    'Absent Deduction Policy': ['absentDeductionPolicyRule', 'absentDeductionPolicyDate'],
-    'Late Deduction Policy': ['lateDeductionPolicyRule', 'lateDeductionPolicyDate'],
+    'Maternity Leave': ['maternityLeavePolicyRule', 'maternityLeavePolicyDate'],
+    'Attendance Bonus': ['attendanceBonusPolicyRule', 'attendanceBonusPolicyDate'],
+    'Absent Deduction': ['absentDeductionPolicyRule', 'absentDeductionPolicyDate'],
+    'Late Deduction': ['lateDeductionPolicyRule', 'lateDeductionPolicyDate'],
     'Bonus Policy': ['bonusPolicyRule', 'bonusPolicyDate'],
     'Tax Policy': ['taxPolicyRule', 'taxPolicyDate'],
     'Shift Policy': ['shiftPolicyRule', 'shiftPolicyDate'],
     'Tiffin Bill Policy': ['tiffinBillPolicyRule', 'tiffinBillPolicyDate'],
     'Allowance Policy': ['allowancePolicyRule', 'allowancePolicyDate'],
-    'Early Out Deduction Policy': ['earlyOutDeductionPolicyRule', 'earlyOutDeductionPolicyDate'],
-    'Service Benefit Policy': ['serviceBenefitPolicyRule', 'serviceBenefitPolicyDate'],
-    'HD Deduct Rule': ['hdDeductRuleRule', 'hdDeductRuleDate'],
+    'Early Out Deduction': ['earlyOutDeductionPolicyRule', 'earlyOutDeductionPolicyDate'],
+    'Service Benefit': ['serviceBenefitPolicyRule', 'serviceBenefitPolicyDate'],
+    'Half Day Deduction': ['hdDeductRulePolicyRule', 'hdDeductRulePolicyDate'],
   };
 
   const policies: PolicyFormData['policies'] = {};
@@ -64,9 +65,10 @@ function transformFromBackend(data: any, availablePolicies: Policy[]): PolicyFor
   });
 
   return {
-    empCode: data.empCode || '',
-    empId: data.empId || '',
-    empName: data.empName || '',
+    empCode: data.acNo || data.empCode || '',
+    empId: data.empNo || data.empId || '',
+    no: data.no || '',
+    empName: data.name || data.empName || '',
     category: data.category || '',
     company: data.company || '',
     location: data.location || '',
@@ -215,30 +217,21 @@ export default function EditPolicyTaggingPage() {
             <div className="mb-4">
               <h5 className="border-bottom pb-2 mb-3 text-primary">Employee Identification</h5>
               <div className="row g-3">
-                <div className="col-md-4">
-                  <label className="form-label">Emp Code *</label>
-                  <div className="input-group">
-                    <input {...register('empCode', { required: true })} className={`form-control ${errors.empCode || duplicateError ? 'is-invalid' : ''}`} placeholder="Browse or Write" onChange={(e) => { register('empCode').onChange(e); setDuplicateError(null); }} />
-                    <button type="button" className="btn btn-outline-secondary" title="Browse">
-                      <i className="fas fa-search"></i>
-                    </button>
-                  </div>
-                  {errors.empCode && <div className="invalid-feedback">Emp Code is required</div>}
-                  {duplicateError && <div className="invalid-feedback d-block">{duplicateError}</div>}
+                <div className="col-md-3">
+                  <label className="form-label">Emp Code</label>
+                  <input {...register('empCode')} className="form-control" readOnly />
                 </div>
-                <div className="col-md-4">
-                  <label className="form-label">Emp ID *</label>
-                  <div className="input-group">
-                    <input {...register('empId', { required: true })} className={`form-control ${errors.empId ? 'is-invalid' : ''}`} placeholder="Browse or Write" />
-                    <button type="button" className="btn btn-outline-secondary" title="Browse">
-                      <i className="fas fa-search"></i>
-                    </button>
-                  </div>
-                  {errors.empId && <div className="invalid-feedback">Emp ID is required</div>}
+                <div className="col-md-3">
+                  <label className="form-label">Emp ID</label>
+                  <input {...register('empId')} className="form-control" readOnly />
                 </div>
-                <div className="col-md-4">
+                <div className="col-md-3">
+                  <label className="form-label">No</label>
+                  <input {...register('no')} className="form-control" readOnly />
+                </div>
+                <div className="col-md-3">
                   <label className="form-label">Emp Name</label>
-                  <input {...register('empName')} className="form-control" />
+                  <input {...register('empName')} className="form-control" readOnly />
                 </div>
               </div>
 

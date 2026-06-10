@@ -1,182 +1,210 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { attendanceService } from '@/services/attendance.service';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { api } from '@/services/api';
+
+interface CsvEmployee {
+  'Emp No.': string;
+  'AC-No.': string;
+  'No.': string;
+  'Name': string;
+  Department: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
 
 export default function UsersPage() {
-  const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [users, setUsers] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<CsvEmployee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [selectedEmployees, setSelectedEmployees] = useState<Set<string>>(new Set());
+  const [removing, setRemoving] = useState(false);
 
-  // Redirect to login if not authenticated
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      router.push('/login');
+    if (isAuthenticated) {
+      loadEmployees();
     }
-  }, [isAuthenticated, authLoading, router]);
+  }, [isAuthenticated]);
 
-  // Load users
-  async function loadUsers() {
+  async function loadEmployees() {
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      console.log('Fetching users from /attendance/users...');
-      const data = await attendanceService.getAllUsers();
-      console.log('Users loaded:', data);
-      setUsers(data);
+      const response = await api.get('/attendance/csv-employees');
+      setEmployees(response.data);
     } catch (err: any) {
-      console.error('Failed to load users:', err);
-      alert('Error loading users: ' + (err.message || 'Network error. Check console for details.'));
+      console.error('Failed to load employees:', err);
+      setError(err.message || 'Failed to load employees');
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      loadUsers();
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedEmployees(new Set(employees.map(emp => emp['AC-No.'])));
+    } else {
+      setSelectedEmployees(new Set());
     }
-  }, [isAuthenticated]);
+  };
 
-  // Sort users by emp_id (device_user_id) numerically
-  const sortedUsers = [...users].sort((a, b) => {
-    const idA = parseInt(a.emp_id) || 0;
-    const idB = parseInt(b.emp_id) || 0;
-    return idA - idB;
-  });
+  const handleSelectEmployee = (acNo: string, checked: boolean) => {
+    const newSelected = new Set(selectedEmployees);
+    if (checked) {
+      newSelected.add(acNo);
+    } else {
+      newSelected.delete(acNo);
+    }
+    setSelectedEmployees(newSelected);
+  };
 
-  // Filter users by search
-  const filteredUsers = sortedUsers.filter(user => 
-    user.full_name_english?.toLowerCase().includes(search.toLowerCase()) ||
-    user.emp_code?.toLowerCase().includes(search.toLowerCase()) ||
-    user.emp_id?.toLowerCase().includes(search.toLowerCase())
-  );
+  const handleRemoveData = async () => {
+    if (selectedEmployees.size === 0) {
+      setError('Please select at least one employee to remove');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to remove data for ${selectedEmployees.size} employee(s)? This will remove No., Name, and Department from the employees table.`)) {
+      return;
+    }
+
+    setRemoving(true);
+    setError(null);
+    try {
+      await api.post('/attendance/remove-employee-data', {
+        acNos: Array.from(selectedEmployees)
+      });
+      
+      // Reload employees
+      await loadEmployees();
+      setSelectedEmployees(new Set());
+      alert('Employee data removed successfully');
+    } catch (err: any) {
+      console.error('Failed to remove employee data:', err);
+      setError(err.message || 'Failed to remove employee data');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  if (authLoading || (!isAuthenticated && !authLoading)) {
+    return (
+      <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+        <div className="text-center">
+          <div className="spinner-border text-primary mb-3" role="status" style={{ width: '3rem', height: '3rem' }}>
+            <span className="visually-hidden">Loading...</span>
+          </div>
+          <p className="text-muted">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-vh-100 bg-light">
-      {/* Header */}
-      <nav className="navbar navbar-dark bg-primary shadow-sm">
-        <div className="container-fluid">
-          <span className="navbar-brand mb-0 h1">
-            <i className="fas fa-users me-2"></i>
-            Device Users ({users.length})
-          </span>
-          <div className="d-flex gap-2">
-            <button className="btn btn-sm btn-light" onClick={loadUsers}>
-              <i className="fas fa-sync me-1"></i>Refresh
-            </button>
-            <button className="btn btn-sm btn-outline-light" onClick={() => router.push('/')}>
-              <i className="fas fa-arrow-left me-1"></i>Back
-            </button>
-          </div>
+    <div className="fade-in">
+      <div className="top-bar mb-4">
+        <div>
+          <h4 className="mb-1 fw-bold">CSV Employees</h4>
+          <p className="text-muted mb-0 small">
+            Employees from CSV uploads
+          </p>
         </div>
-      </nav>
+        {selectedEmployees.size > 0 && (
+          <button
+            className="btn btn-danger"
+            onClick={handleRemoveData}
+            disabled={removing}
+          >
+            {removing ? (
+              <><i className="fas fa-spinner fa-spin me-2"></i>Removing...</>
+            ) : (
+              <><i className="fas fa-trash me-2"></i>Remove Data ({selectedEmployees.size})</>
+            )}
+          </button>
+        )}
+      </div>
 
-      <div className="container-fluid py-4">
-        {/* Search */}
-        <div className="card border-0 shadow-sm mb-4">
-          <div className="card-body">
-            <div className="input-group">
-              <span className="input-group-text bg-white">
-                <i className="fas fa-search text-muted"></i>
-              </span>
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Search by name, employee code, or device ID..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search && (
-                <button className="btn btn-outline-secondary" onClick={() => setSearch('')}>
-                  <i className="fas fa-times"></i>
-                </button>
-              )}
+      {error && (
+        <div className="alert alert-danger alert-dismissible fade show" role="alert">
+          <i className="fas fa-exclamation-circle me-2"></i>
+          {error}
+          <button type="button" className="btn-close" onClick={() => setError(null)} aria-label="Close"></button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-5">
+          <div className="spinner-border text-primary" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+          <p className="text-muted mt-2">Loading employees...</p>
+        </div>
+      ) : (
+        <div className="card border-0 shadow-sm">
+          <div className="card-body p-0">
+            <div className="table-responsive">
+              <table className="table table-hover align-middle mb-0">
+                <thead className="table-light">
+                  <tr>
+                    <th style={{ width: '50px' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedEmployees.size === employees.length && employees.length > 0}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                      />
+                    </th>
+                    <th>AC-No.</th>
+                    <th>No.</th>
+                    <th>Name</th>
+                    <th>Department</th>
+                    <th>Status</th>
+                    <th>Last Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-5">
+                        <div className="mb-3">
+                          <i className="fas fa-users fa-3x text-muted opacity-50"></i>
+                        </div>
+                        <p className="text-muted mb-0">No employees found. Upload a CSV file to add employees.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    employees.map((emp) => (
+                      <tr key={emp['AC-No.']}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedEmployees.has(emp['AC-No.'])}
+                            onChange={(e) => handleSelectEmployee(emp['AC-No.'], e.target.checked)}
+                          />
+                        </td>
+                        <td className="fw-semibold">{emp['AC-No.'] || '-'}</td>
+                        <td>{emp['No.'] || '-'}</td>
+                        <td>{emp['Name'] || '-'}</td>
+                        <td>{emp['Department'] || '-'}</td>
+                        <td>
+                          <span className={`badge ${emp.is_active ? 'bg-success' : 'bg-secondary'}`}>
+                            {emp.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="small text-muted">
+                          {emp.updated_at ? new Date(emp.updated_at).toLocaleDateString() : '-'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
-
-        {/* Users Table */}
-        <div className="card border-0 shadow-sm">
-          <div className="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-            <h5 className="mb-0 fw-bold">
-              <i className="fas fa-id-card me-2 text-primary"></i>
-              All Users
-            </h5>
-            <span className="badge bg-primary">{filteredUsers.length} users</span>
-          </div>
-          <div className="card-body p-0">
-            {loading ? (
-              <div className="text-center py-5">
-                <div className="spinner-border text-primary" role="status">
-                  <span className="visually-hidden">Loading...</span>
-                </div>
-                <p className="text-muted mt-3">Loading users...</p>
-              </div>
-            ) : filteredUsers.length === 0 ? (
-              <div className="text-center py-5">
-                <i className="fas fa-users-slash fa-3x text-muted mb-3"></i>
-                <p className="text-muted">
-                  {search ? 'No users match your search' : 'No users found. Click "Sync Device Users" on dashboard to import from device.'}
-                </p>
-              </div>
-            ) : (
-              <div className="table-responsive">
-                <table className="table table-hover align-middle mb-0">
-                  <thead className="table-light">
-                    <tr>
-                      <th className="px-4">#</th>
-                      <th>Device ID</th>
-                      <th>Employee Code</th>
-                      <th>Name</th>
-                      <th>Department</th>
-                      <th>Designation</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredUsers.map((user, index) => (
-                      <tr key={user.id}>
-                        <td className="px-4">{index + 1}</td>
-                        <td>
-                          <span className="badge bg-secondary">{user.emp_id || '-'}</span>
-                        </td>
-                        <td>
-                          <code className="bg-light px-2 py-1 rounded">{user.emp_code || '-'}</code>
-                        </td>
-                        <td>
-                          <div className="d-flex align-items-center">
-                            <div className="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-2" 
-                                 style={{ width: 40, height: 40 }}>
-                              <i className="fas fa-user"></i>
-                            </div>
-                            <div>
-                              <div className="fw-bold">{user.full_name_english || 'Unknown'}</div>
-                              {user.full_name_bangla && (
-                                <small className="text-muted">{user.full_name_bangla}</small>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        <td>{user.department || '-'}</td>
-                        <td>{user.designation || '-'}</td>
-                        <td>
-                          <span className={`badge ${user.status === 'Active' ? 'bg-success' : 'bg-secondary'}`}>
-                            {user.status || 'Active'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

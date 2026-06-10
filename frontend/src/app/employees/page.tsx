@@ -133,11 +133,11 @@ export default function EmployeesPage() {
           <table className="table table-hover align-middle mb-0">
             <thead className="table-light">
               <tr>
-                <th>Employee</th>
-                <th>Emp Code</th>
-                <th>Company</th>
+                <th>Employee (Name)</th>
+                <th>No.</th>
+                <th>AC-No.</th>
+                <th>Emp No.</th>
                 <th>Department</th>
-                <th>Designation</th>
                 <th className="text-end">Actions</th>
               </tr>
             </thead>
@@ -164,7 +164,7 @@ export default function EmployeesPage() {
                         </div>
                         <div>
                           <div className="fw-bold text-dark">
-                            {emp.full_name_english}
+                            {emp.name || emp.full_name_english}
                           </div>
                           <div className="small text-muted">
                             {emp.mobile_no || 'No contact'}
@@ -172,10 +172,10 @@ export default function EmployeesPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="fw-medium text-primary">#{emp.emp_code}</td>
-                    <td>{emp.company || '-'}</td>
+                    <td className="fw-medium text-primary">{emp.no || emp.emp_code}</td>
+                    <td className="fw-medium">{emp.acNo || emp.punch_card}</td>
+                    <td className="fw-medium">{emp.empNo || emp.emp_id}</td>
                     <td>{emp.department || '-'}</td>
-                    <td>{emp.designation || '-'}</td>
                     <td className="text-end">
                       <div className="btn-group">
                         <Link

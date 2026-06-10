@@ -22,12 +22,15 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { usersService, User, CreateUserData, UpdateUserData } from '@/services/users.service';
 
+type UserRole = 'admin' | 'staff' | 'hr';
+
 interface UserFormData {
   employeeId: string;
   email: string;
   mobileNumber: string;
   password: string;
   isActive: boolean;
+  role: UserRole;
 }
 
 const initialFormData: UserFormData = {
@@ -36,11 +39,12 @@ const initialFormData: UserFormData = {
   mobileNumber: '',
   password: '',
   isActive: true,
+  role: 'staff',
 };
 
 export default function AssignUsersPage() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, user } = useAuth();
   
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,12 +58,17 @@ export default function AssignUsersPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated or if user is not admin
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       router.push('/login');
+      return;
     }
-  }, [isAuthenticated, authLoading, router]);
+
+    if (!authLoading && isAuthenticated && user && user.role !== 'admin') {
+      router.push('/library');
+    }
+  }, [isAuthenticated, authLoading, router, user]);
 
   // Load users on mount
   useEffect(() => {
@@ -90,6 +99,7 @@ export default function AssignUsersPage() {
         mobileNumber: user.mobileNumber || '',
         password: '', // Don't show password
         isActive: user.isActive,
+        role: (user.role as UserRole) || 'staff',
       });
     } else {
       setEditingUser(null);
@@ -120,6 +130,7 @@ export default function AssignUsersPage() {
           email: formData.email,
           mobileNumber: formData.mobileNumber,
           isActive: formData.isActive,
+          role: formData.role,
         };
         
         // Only include password if it's provided
@@ -137,6 +148,7 @@ export default function AssignUsersPage() {
           mobileNumber: formData.mobileNumber,
           password: formData.password,
           isActive: formData.isActive,
+          role: formData.role,
         };
         
         await usersService.createUser(createData);
@@ -299,6 +311,7 @@ export default function AssignUsersPage() {
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Employee ID</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Email</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Mobile Number</th>
+                    <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Role</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Status</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Last Login</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-slate-300">Created</th>
@@ -311,6 +324,17 @@ export default function AssignUsersPage() {
                       <td className="px-6 py-4 font-medium">{user.employeeId}</td>
                       <td className="px-6 py-4 text-slate-300">{user.email}</td>
                       <td className="px-6 py-4 text-slate-300">{user.mobileNumber || '-'}</td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
+                          user.role === 'admin'
+                            ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                            : user.role === 'hr'
+                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                              : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                        }`}>
+                          {user.role === 'admin' ? '👑 Admin' : user.role === 'hr' ? '💼 HR' : '👤 Staff'}
+                        </span>
+                      </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
                           user.isActive 
@@ -381,6 +405,8 @@ export default function AssignUsersPage() {
                   {editingUser ? 'Edit User' : 'Add New User'}
                 </h2>
                 <button
+                  type="button"
+                  title="Close dialog"
                   onClick={handleCloseModal}
                   className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-all"
                 >
@@ -434,6 +460,27 @@ export default function AssignUsersPage() {
                     className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20 transition-all"
                     placeholder="Enter mobile number"
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="role" className="block text-sm font-medium text-slate-300 mb-2">
+                    Role *
+                  </label>
+                  <select
+                    id="role"
+                    value={formData.role}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
+                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50 focus:ring-2 focus:ring-cyan-400/20 transition-all"
+                  >
+                    <option value="staff">Staff</option>
+                    <option value="admin">Admin</option>
+                    <option value="hr">HR</option>
+                  </select>
+                  <p className="text-xs text-slate-400 mt-2">
+                    <strong>Admin:</strong> Full access to all pages<br/>
+                    <strong>HR:</strong> Same access as Admin except user assignment<br/><br/>
+                    <strong>Staff:</strong> Access to Job Cards and Reports only
+                  </p>
                 </div>
 
                 <div>

@@ -93,7 +93,8 @@ export class RuleEngineService {
             ? JSON.parse(rule.conditions) 
             : rule.conditions;
         } catch (e) {
-          result.errors.push(`Failed to parse conditions: ${e.message}`);
+          const errorMessage = e instanceof Error ? e.message : String(e);
+          result.errors.push(`Failed to parse conditions: ${errorMessage}`);
         }
       }
 
@@ -134,7 +135,8 @@ export class RuleEngineService {
       }
 
     } catch (error) {
-      result.errors.push(`Evaluation error: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      result.errors.push(`Evaluation error: ${errorMessage}`);
     }
 
     result.execution_time_ms = Date.now() - startTime;
@@ -315,7 +317,8 @@ export class RuleEngineService {
         );
         testSaved = true;
       } catch (error) {
-        result.errors.push(`Failed to save test case: ${error.message}`);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        result.errors.push(`Failed to save test case: ${errorMessage}`);
       }
     }
 

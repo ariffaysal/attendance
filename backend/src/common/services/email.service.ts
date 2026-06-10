@@ -68,10 +68,11 @@ export class EmailService {
         messageId: result.messageId,
       };
     } catch (error) {
-      this.logger.error('Failed to send email:', error.message);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Failed to send email:', errorMessage);
       return {
         success: false,
-        error: error.message,
+        error: errorMessage,
       };
     }
   }

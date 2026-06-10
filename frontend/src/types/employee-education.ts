@@ -1,10 +1,16 @@
 export interface EmployeeEducation {
   id?: number;
   
-  // Top Section - Employee Information
-  empCode: string;
-  empId: string;
-  empName: string;
+  // CSV 4 columns (new standard)
+  empNo?: string;    // `Emp No.` from CSV
+  acNo?: string;     // `AC-No.` from CSV - PRIMARY key
+  no?: string;       // `No.` from CSV
+  name?: string;     // `Name` from CSV
+  
+  // Top Section - Employee Information (legacy - backward compatibility)
+  empCode: string;   // Maps to `No.`
+  empId: string;     // Maps to `Emp No.`
+  empName: string;   // Maps to `Name`
   category: string;
   company: string;
   location: string;

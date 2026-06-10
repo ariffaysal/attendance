@@ -52,10 +52,11 @@ export interface JobCardDailyRecord {
 }
 
 export interface JobCardEmployee {
-  empId: string;
-  name: string;
-  empCode: string;
-  idCard: string;
+  // CSV 4 identity columns from csv_employees table
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
   dept: string;
   summary: JobCardSummary;
   records: JobCardDailyRecord[];
@@ -71,9 +72,11 @@ export interface MonthlyDailyRecord {
 }
 
 export interface MonthlyEmployee {
-  empId: string;
-  name: string;
-  no: string;
+  // CSV 4 identity columns from csv_employees table
+  empNo: string;    // `Emp No.` from CSV
+  acNo: string;     // `AC-No.` from CSV
+  no: string;       // `No.` from CSV
+  name: string;     // `Name` from CSV
   records: MonthlyDailyRecord[];
   present: number;
   absent: number;

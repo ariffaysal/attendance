@@ -9,6 +9,7 @@ interface EmployeeGroup {
   empCode: string;
   empId: string;
   empName: string;
+  acNo: string;        // Add AC-No. field
   department: string;
   designation: string;
   grossSalary: string;
@@ -20,7 +21,9 @@ export default function EmployeeSalaryInformationDashboard() {
   const [records, setRecords] = useState<EmployeeSalaryInformation[]>([]);
   const [employeeGroups, setEmployeeGroups] = useState<EmployeeGroup[]>([]);
   const [search, setSearch] = useState('');
+  const [searchType, setSearchType] = useState<'name' | 'acc_no'>('name');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [debouncedSearchType, setDebouncedSearchType] = useState<'name' | 'acc_no'>('name');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,13 +31,14 @@ export default function EmployeeSalaryInformationDashboard() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
+      setDebouncedSearchType(searchType);
     }, 300);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, searchType]);
 
   useEffect(() => {
     loadRecords();
-  }, [debouncedSearch]);
+  }, [debouncedSearch, debouncedSearchType]);
 
   // Group records by employee
   useEffect(() => {
@@ -42,18 +46,23 @@ export default function EmployeeSalaryInformationDashboard() {
       const groups: Record<string, EmployeeGroup> = {};
       
       records.forEach((record) => {
-        if (!groups[record.empCode]) {
-          groups[record.empCode] = {
-            empCode: record.empCode,
-            empName: record.empName || '-',
-            empId: record.empId || '-',
-            department: record.department || '-',
-            designation: record.designation || '-',
-            grossSalary: record.grossSalary || '-',
-            bankCount: record.bankInfos?.length || 0,
-            firstRecordId: record.id,
+        // Use acNo or no as the unique key since empCode is undefined
+        const uniqueKey = record.acNo || record.no || record.empId || `id-${record.id}`;
+        
+        if (!groups[uniqueKey]) {
+          groups[uniqueKey] = {
+            empCode: record.empCode || uniqueKey,
+            empId: record.empId,
+            empName: record.empName,
+            acNo: record.acNo || '',        // Add AC-No. field
+            department: record.department,
+            designation: record.designation,
+            grossSalary: record.grossSalary,
+            bankCount: 0,
+            firstRecordId: record.id
           };
         }
+        groups[uniqueKey].bankCount += (record.bankInfos?.length || 0);
       });
       
       setEmployeeGroups(Object.values(groups));
@@ -66,7 +75,7 @@ export default function EmployeeSalaryInformationDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await employeeSalaryInformationService.getAll(debouncedSearch);
+      const data = await employeeSalaryInformationService.getAll(debouncedSearch, debouncedSearchType);
       setRecords(data);
     } catch (err: any) {
       console.error('Failed to load salary information records:', err);
@@ -126,18 +135,35 @@ export default function EmployeeSalaryInformationDashboard() {
 
       <div className="card mb-4">
         <div className="card-body">
-          <div className="input-group">
-            <span className="input-group-text bg-light border-end-0">
-              <i className="fas fa-search text-muted"></i>
-            </span>
+          <form onSubmit={(e) => { e.preventDefault(); loadRecords(); }} className="search-bar no-print">
+            <span className="text-muted fw-bold me-2">Search by:</span>
+
+            {/* Search Type Dropdown */}
+            <select
+              value={searchType}
+              onChange={(e) => setSearchType(e.target.value as 'name' | 'acc_no')}
+              className="form-select"
+              style={{ width: '120px' }}
+              title="Select search type"
+              aria-label="Search type"
+            >
+              <option value="name">Name</option>
+              <option value="acc_no">AC-No.</option>
+            </select>
+
             <input
               type="text"
-              className="form-control border-start-0"
-              placeholder="Search by emp code, emp name, or department..."
+              className="form-control search-input"
+              placeholder={searchType === 'acc_no' ? 'Enter AC-No.' : 'Enter employee name...'}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-          </div>
+
+            <button type="submit" className="btn btn-primary">
+              <i className="fas fa-search"></i>
+              Search
+            </button>
+          </form>
         </div>
       </div>
 
@@ -146,9 +172,8 @@ export default function EmployeeSalaryInformationDashboard() {
           <table className="table table-hover align-middle mb-0">
             <thead className="table-light">
               <tr>
-                <th>Emp Code</th>
-                <th>Emp ID</th>
-                <th>Emp Name</th>
+                <th>AC-No.</th>
+                <th>Name</th>
                 <th>Department</th>
                 <th>Designation</th>
                 <th>Gross Salary</th>
@@ -159,7 +184,7 @@ export default function EmployeeSalaryInformationDashboard() {
             <tbody>
               {employeeGroups.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-5">
+                  <td colSpan={7} className="text-center py-5">
                     <div className="text-muted">
                       <i className="fas fa-money-bill-wave fa-2x mb-3 opacity-50"></i>
                       <p className="mb-0">No salary information records found.</p>
@@ -170,8 +195,7 @@ export default function EmployeeSalaryInformationDashboard() {
               ) : (
                 employeeGroups.map((emp) => (
                   <tr key={emp.empCode}>
-                    <td className="fw-medium text-primary">#{emp.empCode}</td>
-                    <td>{emp.empId}</td>
+                    <td className="fw-medium text-primary">{emp.acNo || emp.empCode}</td>
                     <td>{emp.empName}</td>
                     <td>{emp.department}</td>
                     <td>{emp.designation}</td>
@@ -184,7 +208,7 @@ export default function EmployeeSalaryInformationDashboard() {
                     <td className="text-end">
                       <div className="btn-group">
                         <Link
-                          href={`/employee-salary-information/emp/${emp.empCode}`}
+                          href={`/employee-salary-information/emp-code/${emp.acNo || emp.empCode}`}
                           className="btn btn-sm btn-outline-primary"
                           title="View Salary Details"
                         >
@@ -192,7 +216,7 @@ export default function EmployeeSalaryInformationDashboard() {
                         </Link>
                         <button
                           className="btn btn-sm btn-outline-danger"
-                          onClick={() => handleDeleteEmployee(emp.empCode)}
+                          onClick={() => handleDeleteEmployee(emp.acNo || emp.empCode)}
                           title="Delete Salary Record"
                         >
                           <i className="fas fa-trash"></i>

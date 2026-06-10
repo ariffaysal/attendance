@@ -1,7 +1,24 @@
 import { IsString, IsOptional } from 'class-validator';
 
 export class CreateEmployeeEducationDto {
-  // Top Section - Employee Information
+  // CSV 4 Identity Columns (from frontend)
+  @IsString()
+  @IsOptional()
+  empNo?: string;    // Emp No. from CSV
+
+  @IsString()
+  @IsOptional()
+  acNo?: string;     // AC-No. from CSV
+
+  @IsString()
+  @IsOptional()
+  no?: string;       // No. from CSV
+
+  @IsString()
+  @IsOptional()
+  name?: string;     // Name from CSV
+
+  // Top Section - Employee Information (legacy)
   @IsString()
   empCode: string;
 

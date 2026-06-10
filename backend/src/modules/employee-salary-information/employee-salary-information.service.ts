@@ -1,4 +1,4 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import * as mysql from 'mysql2/promise';
 import { SQL_CONNECTION } from '../../database/database.module';
 import { CreateEmployeeSalaryInformationDto, UpdateEmployeeSalaryInformationDto, BankInfoDto, SalaryBreakdownDto } from './dto/create-employee-salary-information.dto';
@@ -15,8 +15,8 @@ export class EmployeeSalaryInformationService {
     return {
       id: row.id,
       empCode: row.emp_code,
-      empId: row.emp_id,
-      empName: row.emp_name,
+      empId: row.ce_emp_no || row['Emp No.'],
+      empName: row.ce_name || row['Name'],
       category: row.category,
       company: row.company,
       location: row.location,
@@ -37,6 +37,11 @@ export class EmployeeSalaryInformationService {
       netPayable: row.net_payable,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // Extra identity fields - ALWAYS prioritize CSV master values
+      empNo: row.ce_emp_no || row['Emp No.'] || row.emp_no,
+      acNo: row.ce_ac_no || row['AC-No.'] || row.ac_no,
+      no: row.ce_no || row['No.'] || row.emp_code,
+      name: row.ce_name || row['Name'] || row.emp_name
     };
   }
 
@@ -44,6 +49,12 @@ export class EmployeeSalaryInformationService {
     if (!row) return null;
     return {
       id: row.id,
+      // 4 Identity Columns
+      empNo: row['Emp No.'] || row.emp_no,
+      acNo: row['AC-No.'] || row.ac_no,
+      no: row['No.'] || row.emp_code,
+      name: row['Name'] || row.emp_name,
+      // Legacy
       empCode: row.emp_code,
       salaryBank: row.salary_bank,
       branchName: row.branch_name,
@@ -61,6 +72,12 @@ export class EmployeeSalaryInformationService {
     if (!row) return null;
     return {
       id: row.id,
+      // 4 Identity Columns
+      empNo: row['Emp No.'] || row.emp_no,
+      acNo: row['AC-No.'] || row.ac_no,
+      no: row['No.'] || row.emp_code,
+      name: row['Name'] || row.emp_name,
+      // Legacy
       empCode: row.emp_code,
       payrollHead: row.payroll_head,
       type: row.type,
@@ -73,27 +90,57 @@ export class EmployeeSalaryInformationService {
     };
   }
 
-  async findAll(search?: string): Promise<any[]> {
-    let query = 'SELECT * FROM employee_salary_information';
+  async findAll(search?: string, searchType?: 'name' | 'acc_no'): Promise<any[]> {
+    // Fixed JOIN logic: Use AC-No. for joining since that's the lookup key
+    let query = `
+      SELECT 
+        esi.*, 
+        COALESCE(ce_no.\`Emp No.\`, ce_ac.\`Emp No.\`) as ce_emp_no, 
+        COALESCE(ce_no.\`AC-No.\`, ce_ac.\`AC-No.\`) as ce_ac_no, 
+        COALESCE(ce_no.\`No.\`, ce_ac.\`No.\`) as ce_no, 
+        COALESCE(ce_no.\`Name\`, ce_ac.\`Name\`) as ce_name
+      FROM employee_salary_information esi
+      LEFT JOIN csv_employees ce_no ON esi.\`AC-No.\` = ce_no.\`AC-No.\`
+      LEFT JOIN csv_employees ce_ac ON esi.\`AC-No.\` = ce_ac.\`AC-No.\` AND ce_no.\`AC-No.\` IS NULL
+    `;
     const params: any[] = [];
 
     if (search) {
-      query += ' WHERE emp_code LIKE ? OR emp_name LIKE ? OR department LIKE ?';
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm);
+      switch (searchType) {
+        case 'acc_no':
+          // Exact match for AC-No.
+          query += ` WHERE COALESCE(ce_no.\`AC-No.\`, ce_ac.\`AC-No.\`) = ?`;
+          params.push(search);
+          break;
+        case 'name':
+        default:
+          // Search by Name
+          query += ` WHERE COALESCE(ce_no.\`Name\`, ce_ac.\`Name\`) LIKE ?`;
+          const searchTerm = `%${search}%`;
+          params.push(searchTerm);
+          break;
+      }
     }
 
-    query += ' ORDER BY created_at DESC';
+    query += ' ORDER BY esi.id ASC';
 
     const [rows] = await this.connection.execute(query, params);
     return (rows as any[]).map(row => this.transformToCamelCase(row));
   }
 
   async findOne(id: number): Promise<any> {
-    const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_salary_information WHERE id = ?',
-      [id],
-    );
+    const query = `
+      SELECT 
+        esi.*, 
+        COALESCE(ce_no.\`Emp No.\`, ce_ac.\`Emp No.\`) as ce_emp_no, 
+        COALESCE(ce_no.\`AC-No.\`, ce_ac.\`AC-No.\`) as ce_ac_no, 
+        COALESCE(ce_no.\`No.\`, ce_ac.\`No.\`) as ce_no, 
+        COALESCE(ce_no.\`Name\`, ce_ac.\`Name\`) as ce_name
+      FROM employee_salary_information esi
+      LEFT JOIN csv_employees ce_no ON esi.\`AC-No.\` = ce_no.\`AC-No.\`
+      LEFT JOIN csv_employees ce_ac ON esi.\`AC-No.\` = ce_ac.\`AC-No.\` AND ce_no.\`AC-No.\` IS NULL
+      WHERE esi.id = ?`;
+    const [rows] = await this.connection.execute(query, [id]);
     
     const records = rows as any[];
     if (records.length === 0) {
@@ -108,10 +155,19 @@ export class EmployeeSalaryInformationService {
   }
 
   async findByEmpCode(empCode: string): Promise<any> {
-    const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_salary_information WHERE emp_code = ?',
-      [empCode],
-    );
+    const query = `
+      SELECT 
+        esi.*, 
+        COALESCE(ce_no.\`Emp No.\`, ce_ac.\`Emp No.\`) as ce_emp_no, 
+        COALESCE(ce_no.\`AC-No.\`, ce_ac.\`AC-No.\`) as ce_ac_no, 
+        COALESCE(ce_no.\`No.\`, ce_ac.\`No.\`) as ce_no, 
+        COALESCE(ce_no.\`Name\`, ce_ac.\`Name\`) as ce_name
+      FROM employee_salary_information esi
+      LEFT JOIN csv_employees ce_no ON esi.\`AC-No.\` = ce_no.\`AC-No.\`
+      LEFT JOIN csv_employees ce_ac ON esi.\`AC-No.\` = ce_ac.\`AC-No.\` AND ce_no.\`AC-No.\` IS NULL
+      WHERE esi.\`AC-No.\` = ?
+      LIMIT 1`;
+    const [rows] = await this.connection.execute(query, [empCode]);
     
     const records = rows as any[];
     if (records.length === 0) {
@@ -126,37 +182,90 @@ export class EmployeeSalaryInformationService {
   }
 
   async findBankInfosByEmpCode(empCode: string): Promise<any[]> {
+    if (!empCode) return [];
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_salary_bank_info WHERE emp_code = ? ORDER BY sequence ASC',
-      [empCode],
+      'SELECT * FROM employee_salary_bank_info WHERE \`AC-No.\` = ? OR \`No.\` = ? ORDER BY sequence ASC',
+      [empCode, empCode],
     );
     
     return (rows as any[]).map(row => this.transformBankInfoToCamelCase(row));
   }
 
   async findSalaryBreakdownByEmpCode(empCode: string): Promise<any[]> {
+    if (!empCode) return [];
     const [rows] = await this.connection.execute(
-      'SELECT * FROM employee_salary_breakdown WHERE emp_code = ? ORDER BY sequence ASC',
-      [empCode],
+      'SELECT * FROM employee_salary_breakdown WHERE \`AC-No.\` = ? OR \`No.\` = ? ORDER BY sequence ASC',
+      [empCode, empCode],
     );
     
     return (rows as any[]).map(row => this.transformSalaryBreakdownToCamelCase(row));
   }
 
+  /**
+   * Lookup 4 CSV columns from csv_employees table
+   */
+  private async lookupCsvColumns(empCode: string): Promise<{ empNo: string; acNo: string; no: string; name: string }> {
+    const variations = [empCode];
+    if (empCode.startsWith('E') && /^E\d+$/i.test(empCode)) {
+      variations.push(`EMP${empCode.substring(1)}`);
+      variations.push(empCode.substring(1));
+      variations.push(String(parseInt(empCode.substring(1), 10)));
+    } else if (!empCode.startsWith('EMP')) {
+      variations.push(`EMP${empCode}`);
+      variations.push(`E${empCode}`);
+    }
+
+    for (const codeVar of variations) {
+      const [rows] = await this.connection.execute(
+        `SELECT \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\` FROM csv_employees WHERE \`AC-No.\` = ? OR \`No.\` = ? LIMIT 1`,
+        [codeVar, codeVar]
+      );
+      const csvEmps = rows as any[];
+      if (csvEmps.length > 0) {
+        return {
+          empNo: csvEmps[0]['Emp No.'] || '',
+          acNo: csvEmps[0]['AC-No.'] || '',
+          no: csvEmps[0]['No.'] || '',
+          name: csvEmps[0]['Name'] || ''
+        };
+      }
+    }
+
+    return { empNo: '', acNo: '', no: '', name: '' };
+  }
+
   async create(dto: CreateEmployeeSalaryInformationDto): Promise<any> {
+    // Lookup 4 CSV columns from csv_employees
+    const csvData = await this.lookupCsvColumns(dto.empCode);
+
+    // Check if salary record already exists for this employee
+    const [existingRows] = await this.connection.execute(
+      'SELECT id FROM employee_salary_information WHERE \`AC-No.\` = ? OR \`No.\` = ? LIMIT 1',
+      [csvData.acNo, csvData.no]
+    );
+    
+    if ((existingRows as any[]).length > 0) {
+      throw new BadRequestException(
+        `Salary record already exists for employee ${csvData.name} (${dto.empCode}). Please update the existing record instead.`
+      );
+    }
+
     // Insert main salary information
     const sql = `
       INSERT INTO employee_salary_information (
-        emp_code, emp_id, emp_name, category, company, location, division, department,
+        \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`,
+        category, company, location, division, department,
         section, subsection, designation, s_grade, st_salary, gross_salary, b_gross,
         cash_disbursement, policy, mode, total_additions, total_deductions, net_payable
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
+    // Use frontend identity data first, CSV lookup as fallback
     const values = [
-      dto.empCode,
-      dto.empId || null,
-      dto.empName || null,
+      dto.empNo || csvData.empNo || dto.empId || null,
+      dto.acNo || csvData.acNo || dto.empCode || null,
+      dto.no || csvData.no || dto.empCode || null,
+      dto.empName || csvData.name || null,
       dto.category || null,
       dto.company || null,
       dto.location || null,
@@ -182,56 +291,84 @@ export class EmployeeSalaryInformationService {
 
     // Insert bank information if provided
     if (dto.bankInfos && dto.bankInfos.length > 0) {
-      await this.createBankInfos(dto.empCode, dto.bankInfos);
+      try {
+        await this.createBankInfos(csvData, dto.bankInfos, dto.empCode);
+      } catch (error) {
+        console.error('Error creating bank infos:', error);
+        throw error;
+      }
     }
 
     // Insert salary breakdown if provided
     if (dto.salaryBreakdown && dto.salaryBreakdown.length > 0) {
-      await this.createSalaryBreakdowns(dto.empCode, dto.salaryBreakdown);
+      try {
+        await this.createSalaryBreakdowns(csvData, dto.salaryBreakdown, dto.empCode);
+      } catch (error) {
+        console.error('Error creating salary breakdowns:', error);
+        throw error;
+      }
     }
 
     return this.findOne(insertId);
   }
 
-  async createBankInfos(empCode: string, bankInfos: BankInfoDto[]): Promise<void> {
+  async createBankInfos(csvData: { empNo: string; acNo: string; no: string; name: string }, bankInfos: BankInfoDto[], empCode: string): Promise<void> {
+    // Use REPLACE INTO to handle duplicates atomically
+    // This requires unique index on (AC-No.)
     const sql = `
-      INSERT INTO employee_salary_bank_info (
-        emp_code, salary_bank, branch_name, account_no, salary_amount, 
+      REPLACE INTO employee_salary_bank_info (
+        emp_code,
+        \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`,
+        salary_bank, branch_name, account_no, salary_amount, 
         salary_period, show_tax, sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     for (const bank of bankInfos) {
+      // Use frontend identity data first, CSV lookup as fallback, then empCode as final fallback
       const values = [
-        empCode,
-        bank.salaryBank || null,
-        bank.branchName || null,
-        bank.accountNo || null,
-        bank.salaryAmount || null,
-        bank.salaryPeriod || null,
+        empCode || '',
+        csvData.empNo || empCode || '',
+        csvData.acNo || empCode || '',
+        csvData.no || empCode || '',
+        csvData.name || '',
+        bank.salaryBank || '',
+        bank.branchName || '',
+        bank.accountNo || '',
+        bank.salaryAmount || '0',
+        bank.salaryPeriod || '',
         bank.showTax || 'Yes',
-        bank.sequence || '1',
+        parseInt(bank.sequence) || 1,
       ];
       await this.connection.execute(sql, values);
     }
   }
 
-  async createSalaryBreakdowns(empCode: string, salaryBreakdown: SalaryBreakdownDto[]): Promise<void> {
+  async createSalaryBreakdowns(csvData: { empNo: string; acNo: string; no: string; name: string }, salaryBreakdown: SalaryBreakdownDto[], empCode: string): Promise<void> {
+    // Use REPLACE INTO to handle duplicates atomically
+    // This requires unique index on (emp_code, payroll_head)
     const sql = `
-      INSERT INTO employee_salary_breakdown (
-        emp_code, payroll_head, type, percentage_formula, base_head, amount, sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      REPLACE INTO employee_salary_breakdown (
+        emp_code,
+        \`Emp No.\`, \`AC-No.\`, \`No.\`, \`Name\`,
+        payroll_head, type, percentage_formula, base_head, amount, sequence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     for (const item of salaryBreakdown) {
+      // Use frontend identity data first, CSV lookup as fallback, then empCode as final fallback
       const values = [
-        empCode,
-        item.payrollHead || null,
-        item.type || null,
-        item.percentageFormula || null,
-        item.baseHead || null,
-        item.amount || null,
-        item.sequence || '1',
+        empCode || '',
+        csvData.empNo || empCode || '',
+        csvData.acNo || empCode || '',
+        csvData.no || empCode || '',
+        csvData.name || '',
+        item.payrollHead || '',
+        item.type || '',
+        item.percentageFormula || '',
+        item.baseHead || '',
+        item.amount || '0',
+        parseInt(item.sequence) || 1,
       ];
       await this.connection.execute(sql, values);
     }
@@ -242,9 +379,6 @@ export class EmployeeSalaryInformationService {
     
     const sql = `
       UPDATE employee_salary_information SET
-        emp_code = ?,
-        emp_id = ?,
-        emp_name = ?,
         category = ?,
         company = ?,
         location = ?,
@@ -266,10 +400,8 @@ export class EmployeeSalaryInformationService {
       WHERE id = ?
     `;
 
+    // CSV columns (Emp No., AC-No., No., Name) are NOT updated - they remain from CSV
     const values = [
-      dto.empCode || existing.empCode,
-      dto.empId !== undefined ? dto.empId : existing.empId,
-      dto.empName !== undefined ? dto.empName : existing.empName,
       dto.category !== undefined ? dto.category : existing.category,
       dto.company !== undefined ? dto.company : existing.company,
       dto.location !== undefined ? dto.location : existing.location,
@@ -293,24 +425,43 @@ export class EmployeeSalaryInformationService {
 
     await this.connection.execute(sql, values);
 
+    // Get CSV data for bank/breakdown updates
+    // Use existing identity data first, fallback to CSV lookup
+    const lookupCode = existing.acNo || existing.no || existing.empCode;
+    const csvData = lookupCode ? await this.lookupCsvColumns(lookupCode) : { empNo: '', acNo: '', no: '', name: '' };
+    
+    // Use existing identity data if CSV lookup fails
+    const identityData = {
+      empNo: csvData.empNo || existing.empNo || '',
+      acNo: csvData.acNo || existing.acNo || existing.no || '',
+      no: csvData.no || existing.no || existing.acNo || '',
+      name: csvData.name || existing.name || ''
+    };
+
     // Update bank information if provided
     if (dto.bankInfos && dto.bankInfos.length > 0) {
-      // Delete existing bank infos and recreate
-      await this.connection.execute(
-        'DELETE FROM employee_salary_bank_info WHERE emp_code = ?',
-        [dto.empCode || existing.empCode],
-      );
-      await this.createBankInfos(dto.empCode || existing.empCode, dto.bankInfos);
+      const deleteKey = identityData.acNo || identityData.no;
+      if (deleteKey) {
+        // Delete existing bank infos and recreate
+        await this.connection.execute(
+          'DELETE FROM employee_salary_bank_info WHERE \`AC-No.\` = ? OR \`No.\` = ?',
+          [deleteKey, deleteKey],
+        );
+        await this.createBankInfos(identityData, dto.bankInfos, deleteKey);
+      }
     }
 
     // Update salary breakdown if provided
     if (dto.salaryBreakdown && dto.salaryBreakdown.length > 0) {
-      // Delete existing salary breakdown and recreate
-      await this.connection.execute(
-        'DELETE FROM employee_salary_breakdown WHERE emp_code = ?',
-        [dto.empCode || existing.empCode],
-      );
-      await this.createSalaryBreakdowns(dto.empCode || existing.empCode, dto.salaryBreakdown);
+      const deleteKey = identityData.acNo || identityData.no;
+      if (deleteKey) {
+        // Delete existing salary breakdown and recreate
+        await this.connection.execute(
+          'DELETE FROM employee_salary_breakdown WHERE \`AC-No.\` = ? OR \`No.\` = ?',
+          [deleteKey, deleteKey],
+        );
+        await this.createSalaryBreakdowns(identityData, dto.salaryBreakdown, deleteKey);
+      }
     }
 
     return this.findOne(id);
@@ -321,14 +472,14 @@ export class EmployeeSalaryInformationService {
     
     // Delete salary breakdown first (cascade should handle this, but just to be safe)
     await this.connection.execute(
-      'DELETE FROM employee_salary_breakdown WHERE emp_code = ?',
-      [existing.empCode],
+      'DELETE FROM employee_salary_breakdown WHERE \`AC-No.\` = ? OR \`No.\` = ?',
+      [existing.acNo || existing.no, existing.acNo || existing.no],
     );
     
     // Delete bank infos first (cascade should handle this, but just to be safe)
     await this.connection.execute(
-      'DELETE FROM employee_salary_bank_info WHERE emp_code = ?',
-      [existing.empCode],
+      'DELETE FROM employee_salary_bank_info WHERE \`AC-No.\` = ? OR \`No.\` = ?',
+      [existing.acNo || existing.no, existing.acNo || existing.no],
     );
     
     // Delete main record
@@ -336,5 +487,46 @@ export class EmployeeSalaryInformationService {
       'DELETE FROM employee_salary_information WHERE id = ?',
       [id],
     );
+  }
+
+  /**
+   * Update salary deduction calculations for an employee
+   * This saves calculated absent amount, late deduction, and final payable
+   */
+  async updateSalaryDeductions(
+    empCode: string, 
+    deductions: {
+      absentAmount?: number;
+      lateDeduct?: number;
+      totalDeductions?: number;
+      finalPayable?: number;
+    }
+  ): Promise<void> {
+    const {
+      absentAmount,
+      lateDeduct,
+      totalDeductions,
+      finalPayable
+    } = deductions;
+
+    const sql = `
+      UPDATE employee_salary_information SET
+        absent_amount = ?,
+        late_deduct = ?,
+        total_deductions = ?,
+        net_payable = ?
+      WHERE \`AC-No.\` = ?
+    `;
+
+    const csvData = await this.lookupCsvColumns(empCode);
+    const values = [
+      absentAmount?.toFixed(2) || '0.00',
+      lateDeduct?.toFixed(2) || '0.00',
+      totalDeductions?.toFixed(2) || '0.00',
+      finalPayable?.toFixed(2) || '0.00',
+      csvData.acNo || csvData.no
+    ];
+
+    await this.connection.execute(sql, values);
   }
 }

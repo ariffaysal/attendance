@@ -122,7 +122,8 @@ export class LibraryController {
       console.log('[DEBUG] Update successful:', result);
       return result;
     } catch (error) {
-      console.error('[DEBUG] Update failed:', error.message);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('[DEBUG] Update failed:', errorMessage);
       throw error;
     }
   }

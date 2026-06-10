@@ -65,10 +65,11 @@ export class SmsService {
         messageId: result.sid,
       };
     } catch (error) {
-      this.logger.error('Failed to send SMS:', error.message);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Failed to send SMS:', errorMessage);
       return {
         success: false,
-        error: error.message,
+        error: errorMessage,
       };
     }
     */

@@ -1142,3 +1142,188 @@ html {
     align-self: flex-end;
   }
 }
+
+/* ==========================================
+   JOB CARDS STYLES
+   ========================================== */
+
+.job-card {
+  transition: all 0.3s ease;
+  border: 2px solid transparent;
+}
+
+.job-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1) !important;
+}
+
+.job-card.ring-2 {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2), 0 8px 25px rgba(0, 0, 0, 0.1) !important;
+}
+
+.form-check-custom {
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.form-check-custom:hover {
+  border-color: var(--primary);
+}
+
+/* Print styles for job cards */
+@media print {
+  .job-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 2rem;
+    border: 1px solid #ddd;
+  }
+  
+  .job-card .card-header {
+    background: #f8f9fa !important;
+    border-bottom: 2px solid #dee2e6;
+  }
+  
+  .print-header {
+    display: block !important;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid #333;
+  }
+  
+  .job-card .table {
+    font-size: 11pt;
+  }
+  
+  .job-card .badge {
+    border: 1px solid #ddd;
+  }
+}
+
+/* Summary stat cards */
+.job-card .bg-light,
+.job-card .bg-success,
+.job-card .bg-danger,
+.job-card .bg-warning,
+.job-card .bg-info,
+.job-card .bg-secondary {
+  transition: transform 0.2s ease;
+}
+
+.job-card:hover .bg-light,
+.job-card:hover .bg-success,
+.job-card:hover .bg-danger,
+.job-card:hover .bg-warning,
+.job-card:hover .bg-info,
+.job-card:hover .bg-secondary {
+  transform: scale(1.02);
+}
+
+/* Table styles within job cards */
+.job-card .table th {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 0.7rem;
+  padding: 0.75rem 1rem;
+}
+
+.job-card .table td {
+  padding: 0.625rem 1rem;
+  vertical-align: middle;
+}
+
+.job-card .font-monospace {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+}
+
+/* ==========================================
+   CLEAN JOB CARDS STYLES
+   ========================================== */
+
+.job-cards-layout {
+  background: #fff;
+}
+
+.job-cards-layout .list-group-item {
+  border-left: none;
+  border-right: none;
+  transition: background-color 0.15s ease;
+}
+
+.job-cards-layout .list-group-item:hover {
+  background-color: #f8f9fa;
+}
+
+.job-cards-layout .list-group-item.active {
+  background-color: #e9ecef;
+  border-color: #dee2e6;
+  color: inherit;
+}
+
+.job-cards-layout .list-group-item.active .text-muted {
+  color: #6c757d !important;
+}
+
+/* Preview panel */
+.job-card-preview {
+  border: 1px solid #dee2e6;
+}
+
+.job-card-preview .card-header {
+  border-bottom: 2px solid #333;
+}
+
+/* Summary boxes */
+.job-card-preview .summary-box {
+  border: 1px solid #dee2e6;
+  background: #fff;
+}
+
+/* Table styling */
+.job-card-preview .table {
+  font-size: 0.85rem;
+}
+
+.job-card-preview .table th {
+  background: #f8f9fa;
+  font-weight: 600;
+  border-bottom: 2px solid #dee2e6;
+}
+
+.job-card-preview .table td {
+  vertical-align: middle;
+}
+
+/* Print styles */
+@media print {
+  .job-cards-layout .col-md-4 {
+    display: none;
+  }
+  
+  .job-cards-layout .col-md-8 {
+    width: 100%;
+    max-width: 100%;
+    flex: 0 0 100%;
+  }
+  
+  .job-card-preview {
+    border: 2px solid #333;
+    box-shadow: none;
+  }
+  
+  .job-card-preview .card-header {
+    background: #fff !important;
+    border-bottom: 3px double #333;
+  }
+  
+  .job-card-preview .btn {
+    display: none;
+  }
+  
+  .job-card-preview .table th {
+    background: #e0e0e0 !important;
+  }
+}

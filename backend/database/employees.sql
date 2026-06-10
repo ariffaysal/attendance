@@ -1,10 +1,17 @@
--- Employees Master Table
--- Run this in phpMyAdmin or MySQL CLI
+-- employees.sql
+-- Master employee profiles with full details
+-- Primary identity: AC-No. (all 4 columns stored, AC-No. is the lookup key)
 
 CREATE TABLE IF NOT EXISTS employees (
     id INT AUTO_INCREMENT PRIMARY KEY,
     
-    -- Basic Info
+    -- 4 Identity Columns (all stored for display, AC-No. is the lookup key)
+    `Emp No.` VARCHAR(50) NOT NULL DEFAULT '',
+    `AC-No.` VARCHAR(50) NOT NULL,
+    `No.` VARCHAR(50) NOT NULL DEFAULT '',
+    `Name` VARCHAR(200) NOT NULL DEFAULT '',
+    
+    -- Basic Info (sync-specific)
     emp_code VARCHAR(50),
     emp_id VARCHAR(50),
     punch_card VARCHAR(50),
@@ -68,10 +75,11 @@ CREATE TABLE IF NOT EXISTS employees (
     
     -- Timestamps
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
+    -- Indexes
+    INDEX idx_ac_no (`AC-No.`),
+    INDEX idx_emp_no (`Emp No.`),
+    INDEX idx_no (`No.`),
+    INDEX idx_name (`Name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Insert sample data
-INSERT INTO employees (emp_code, full_name_english, department, designation, status) VALUES
-('EMP001', 'John Doe', 'IT', 'Developer', 'Active'),
-('EMP002', 'Jane Smith', 'HR', 'Manager', 'Active');
