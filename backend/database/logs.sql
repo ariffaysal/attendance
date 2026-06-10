@@ -1,0 +1,36 @@
+-- Logs Table for CSV Upload (Attendance Raw Data)
+-- Run this in phpMyAdmin or MySQL CLI
+
+CREATE TABLE IF NOT EXISTS logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    `Emp No.` VARCHAR(50),
+    `AC-No.` VARCHAR(50),
+    `No.` VARCHAR(50),
+    `Name` VARCHAR(200),
+    `Auto-Assign` VARCHAR(50),
+    `Date` VARCHAR(20),
+    `Timetable` VARCHAR(50),
+    `On duty` VARCHAR(10),
+    `Off duty` VARCHAR(10),
+    `Clock In` VARCHAR(10),
+    `Clock Out` VARCHAR(10),
+    `Normal` VARCHAR(10),
+    `Real time` VARCHAR(10),
+    `Late` VARCHAR(10),
+    `Early` VARCHAR(10),
+    `Absent` VARCHAR(10),
+    `OT Time` VARCHAR(10),
+    `Work Time` VARCHAR(10),
+    `Exception` VARCHAR(100),
+    `Must C/In` VARCHAR(10),
+    `Must C/Out` VARCHAR(10),
+    `Department` VARCHAR(100),
+    `NDays` VARCHAR(10),
+    `WeekEnd` VARCHAR(10),
+    `Holiday` VARCHAR(10),
+    `ATT_Time` VARCHAR(10),
+    `NDays_OT` VARCHAR(10),
+    `WeekEnd_OT` VARCHAR(10),
+    `Holiday_OT` VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

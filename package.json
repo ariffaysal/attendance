@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "@nestjs/platform-socket.io": "^11.1.18",
+    "@nestjs/websockets": "^11.1.18",
+    "@types/cookie-parser": "^1.4.10",
+    "autoprefixer": "^10.4.27",
+    "cookie-parser": "^1.4.7",
+    "lucide-react": "^1.7.0",
+    "postcss": "^8.5.9",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "tailwindcss": "^3.4.19",
+    "xlsx": "^0.18.5"
+  }
+}
