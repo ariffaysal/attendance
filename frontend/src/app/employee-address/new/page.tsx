@@ -183,9 +183,12 @@ export default function NewAddressPage() {
     // Validate if employee already has address records
     try {
       setValidatingEmployee(true);
-      const existing = await employeeAddressService.getByEmpCode(employee.emp_code || employee.acNo || employee.no);
-      if (existing && existing.id) {
-        setDuplicateError(`Employee ${employee.name || employee.full_name_english} (${employee.emp_code || employee.acNo}) already has address records. You can view and edit existing records.`);
+      const empKey = employee.emp_code ?? employee.acNo ?? employee.no;
+      if (typeof empKey === 'string' && empKey.length > 0) {
+        const existing = await employeeAddressService.getByEmpCode(empKey);
+        if (existing && existing.id) {
+          setDuplicateError(`Employee ${employee.name || employee.full_name_english} (${empKey}) already has address records. You can view and edit existing records.`);
+        }
       }
     } catch (err) {
       // Employee doesn't have address records yet - this is what we want
